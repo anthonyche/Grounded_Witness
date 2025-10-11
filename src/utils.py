@@ -4,14 +4,14 @@ import numpy as np
 import yaml
 import torch
 import torch_geometric.transforms as T
-from torch_geometric.datasets import Planetoid, TUDataset
+from torch_geometric.datasets import Planetoid, TUDataset, Yelp
 from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.datasets import ExplainerDataset
 from torch_geometric.datasets.graph_generator import BAGraph
 from torch_geometric.utils import remove_self_loops
 from torch_geometric.loader import DataLoader
 from torch.utils.data import random_split
-
+from torch_geometric.transforms import ToUndirected, AddSelfLoops, NormalizeFeatures
 
 
 def set_seed(seed):
@@ -113,6 +113,72 @@ def dataset_func(config):
         print(data)
         return data
     
+    if data_name == "Yelp":
+        # Load Yelp dataset for node classification
+        data_root = config.get("data_root", data_dir)
+        os.makedirs(data_root, exist_ok=True)
+        
+        print(f"[dataset_func] Loading Yelp dataset from {data_root}...")
+        dataset = Yelp(root=data_root, transform=NormalizeFeatures())
+        data = dataset[0]
+        
+        print(f"[dataset_func] Original Yelp data: nodes={data.num_nodes}, edges={data.edge_index.size(1)}")
+        
+        # Ensure undirected graph
+        data = ToUndirected()(data)
+        print(f"[dataset_func] After ToUndirected: edges={data.edge_index.size(1)}")
+        
+        # Keep original graph structure without adding self-loops
+        
+        # Update config with dataset-derived dimensions
+        config['input_dim'] = data.x.size(1)
+        # Yelp is multi-label classification: y is [num_nodes, num_labels]
+        if len(data.y.shape) > 1:
+            config['output_dim'] = data.y.size(1)  # number of labels
+            config['multi_label'] = True
+        else:
+            config['output_dim'] = int(data.y.max().item()) + 1
+            config['multi_label'] = False
+        config['num_nodes'] = data.num_nodes
+        
+        print(f"[dataset_func] Yelp dimensions: input_dim={config['input_dim']}, output_dim={config['output_dim']}, num_nodes={config['num_nodes']}, multi_label={config.get('multi_label', False)}")
+        
+        # Get target nodes for explanation
+        target_nodes = config.get('target_nodes', None)
+        if target_nodes is None:
+            # Sample from test set
+            num_samples = config.get('num_target_nodes', 50)
+            test_indices = data.test_mask.nonzero(as_tuple=True)[0]
+            if len(test_indices) > num_samples:
+                # Random sampling with seed
+                gen = torch.Generator()
+                gen.manual_seed(random_seed)
+                perm = torch.randperm(len(test_indices), generator=gen)
+                target_nodes = test_indices[perm[:num_samples]].tolist()
+            else:
+                target_nodes = test_indices.tolist()
+            print(f"[dataset_func] Sampled {len(target_nodes)} target nodes from test set")
+        else:
+            print(f"[dataset_func] Using {len(target_nodes)} provided target nodes")
+        
+        # Prepare data resource dict
+        data_resource = {
+            "dataset": dataset,
+            "data": data,
+            "input_dim": config['input_dim'],
+            "output_dim": config['output_dim'],
+            "num_nodes": config['num_nodes'],
+            "multi_label": config.get('multi_label', False),
+            "splits": {
+                "train_mask": data.train_mask,
+                "val_mask": data.val_mask,
+                "test_mask": data.test_mask
+            },
+            "target_nodes": target_nodes
+        }
+        
+        return data_resource
+    
 
     if data_size is None or num_class is None:
         raise ValueError("Planetoid datasets require 'data_size' and 'output_dim' in the config.")
@@ -146,3 +212,119 @@ def load_precomputed(save_dir='precomputed/'):
             batch_data = torch.load(os.path.join(save_dir, fname))
             precomputed_data.update(batch_data)
     return precomputed_data
+
+
+def compute_fidelity_minus(model, original_graph, explanation_subgraph, device):
+    """
+    计算Fidelity- (Fidelity Minus) 指标
+    
+    Fidelity- = Pr(M(G)) - Pr(M(G_s))
+    其中:
+    - G 是原始图 (original_graph)
+    - G_s 是解释子图 (explanation_subgraph)
+    - M 是GNN模型
+    - Pr 是对目标类别的预测概率
+    
+    对于MUTAG图分类任务，我们使用原始图的predicted label作为目标类别
+    
+    Args:
+        model: 训练好的GNN模型
+        original_graph: 原始图 (torch_geometric.data.Data)
+        explanation_subgraph: 解释子图/witness (torch_geometric.data.Data)
+        device: torch.device
+    
+    Returns:
+        float: fidelity- 值，越大表示解释越重要（移除后预测概率下降越多）
+    """
+    model.eval()
+    
+    with torch.no_grad():
+        # 1. 获取原始图的预测
+        original_graph = original_graph.to(device)
+        logits_original = model(original_graph)
+        probs_original = torch.softmax(logits_original, dim=-1)
+        
+        # 对于图分类，predicted label
+        if probs_original.dim() > 1:
+            probs_original = probs_original.squeeze(0)
+        predicted_label = logits_original.argmax(dim=-1).item()
+        prob_original = probs_original[predicted_label].item()
+        
+        # 2. 获取解释子图的预测
+        explanation_subgraph = explanation_subgraph.to(device)
+        # 确保子图有batch属性
+        if not hasattr(explanation_subgraph, 'batch') or explanation_subgraph.batch is None:
+            explanation_subgraph.batch = torch.zeros(
+                explanation_subgraph.num_nodes, 
+                dtype=torch.long, 
+                device=device
+            )
+        
+        logits_subgraph = model(explanation_subgraph)
+        probs_subgraph = torch.softmax(logits_subgraph, dim=-1)
+        
+        if probs_subgraph.dim() > 1:
+            probs_subgraph = probs_subgraph.squeeze(0)
+        prob_subgraph = probs_subgraph[predicted_label].item()
+        
+        # 3. 计算 Fidelity- = Pr(M(G)) - Pr(M(G_s))
+        fidelity_minus = prob_original - prob_subgraph
+        
+    return fidelity_minus
+
+
+def compute_constraint_coverage(subgraph, constraints, Budget=8):
+    """
+    计算解释子图覆盖了多少个约束
+    
+    使用与ApxChase相同的matching逻辑:
+    1. 对每个constraint，在subgraph上找head matches
+    2. 检查repair cost是否 <= Budget
+    3. 如果满足，则该constraint被覆盖
+    
+    Args:
+        subgraph: 解释子图 (torch_geometric.data.Data)
+        constraints: 约束列表
+        Budget: repair cost的预算阈值
+    
+    Returns:
+        tuple: (covered_constraint_names, coverage_ratio)
+            - covered_constraint_names: list of str, 被覆盖的约束名称
+            - coverage_ratio: float, 覆盖比例 = |covered| / |total|
+    """
+    try:
+        from matcher import find_head_matches, backchase_repair_cost
+    except ImportError:
+        # 如果matcher模块不可用，返回空结果
+        return [], 0.0
+    
+    covered_names = []
+    
+    for constraint in constraints:
+        constraint_name = constraint.get("name", str(constraint))
+        
+        try:
+            # 1. 找到head matches
+            head_matches = find_head_matches(subgraph, constraint)
+            
+            if not head_matches:
+                continue
+            
+            # 2. 对每个match检查repair cost
+            for match in head_matches:
+                cost = backchase_repair_cost(subgraph, constraint, match, Budget)
+                
+                # 如果cost有效且在预算内，则该constraint被覆盖
+                if cost is not None and cost <= Budget:
+                    covered_names.append(constraint_name)
+                    break  # 一个constraint只需要一个有效match即可
+                    
+        except Exception as e:
+            # 如果matching出错，跳过该constraint
+            continue
+    
+    # 去重并排序
+    covered_names = sorted(set(covered_names))
+    coverage_ratio = len(covered_names) / len(constraints) if len(constraints) > 0 else 0.0
+    
+    return covered_names, coverage_ratio

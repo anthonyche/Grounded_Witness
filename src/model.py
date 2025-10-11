@@ -466,39 +466,115 @@ def main(config_file, output_dir):
         print(f'Model saved to: {model_path}')
         return
 
-    # Node-level datasets (Planetoid, etc.)
-    data = dataset_resource
+    # Node-level datasets (Planetoid, Yelp, etc.)
+    # Check if dataset_resource is a dict (Yelp returns dict) or Data object (Planetoid returns Data)
+    if isinstance(dataset_resource, dict):
+        data = dataset_resource['data']
+        is_multi_label = dataset_resource.get('multi_label', False)
+    else:
+        data = dataset_resource
+        is_multi_label = False
+    
     # Keep data on CPU; batches/tensors are moved to device inside the loops.
 
+    # If this is a node-level task (single giant graph with masks), but the
+    # config accidentally specifies a *graph-classification* model (e.g.,
+    # `gcn_graph_3`), map it to its node-level counterpart so the forward
+    # signature matches (x, edge_index).
+    graph2node = {
+        'gcn_graph_1': 'gcn',
+        'gcn_graph_2': 'gcn',
+        'gcn_graph_3': 'gcn',
+        'gat_graph_3': 'gat',
+        'sage_graph_3': 'sage',
+    }
+    orig_name = config.get('model_name')
+    if orig_name in graph2node:
+        remapped = graph2node[orig_name]
+        print(f"[model.py] Detected node-level task; remapping model '{orig_name}' -> '{remapped}'")
+        # Use a shallow copy so we don't mutate the original config reference
+        config = dict(config)
+        config['model_name'] = remapped
     model = get_model(config).to(device)
     best_loss = float('inf')
     best_model_state = None
+    best_val_metric = 0.0
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+    num_epochs = config.get('num_epochs', 200)
+    learning_rate = config.get('learning_rate', 0.01)
+    weight_decay = config.get('weight_decay', 5e-4)
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    model.train()
-    for epoch in range(200):
+    print(f"\nTraining {model_name} on {data_name}")
+    print(f"Multi-label: {is_multi_label}, Epochs: {num_epochs}")
+    print("-" * 60)
+    
+    for epoch in range(1, num_epochs + 1):
+        model.train()
         optimizer.zero_grad()
         out = model(data.x, data.edge_index)
-        if model_name == 'gin':
+        
+        if is_multi_label:
+            # Multi-label classification (e.g., Yelp)
+            # Remove log_softmax by taking exp (since model outputs log_softmax)
+            out = torch.exp(out)  # Convert log probabilities back to probabilities
+            loss = F.binary_cross_entropy(out[data.train_mask], data.y[data.train_mask].float())
+        elif model_name == 'gin':
             loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
         else:
             loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])
+        
         loss.backward()
         optimizer.step()
-        print(f'Epoch {epoch+1}, Loss: {loss.item()}')
+        
+        # Evaluation
+        if epoch % 10 == 0 or epoch == 1:
+            model.eval()
+            with torch.no_grad():
+                out = model(data.x, data.edge_index)
+                
+                if is_multi_label:
+                    out = torch.exp(out)
+                    # For multi-label, use threshold 0.5
+                    pred = (out > 0.5).float()
+                    
+                    # Calculate accuracy (exact match ratio)
+                    train_acc = (pred[data.train_mask] == data.y[data.train_mask]).all(dim=1).float().mean().item()
+                    val_acc = (pred[data.val_mask] == data.y[data.val_mask]).all(dim=1).float().mean().item()
+                    test_acc = (pred[data.test_mask] == data.y[data.test_mask]).all(dim=1).float().mean().item()
+                else:
+                    pred = out.argmax(dim=-1)
+                    train_acc = (pred[data.train_mask] == data.y[data.train_mask]).float().mean().item()
+                    val_acc = (pred[data.val_mask] == data.y[data.val_mask]).float().mean().item()
+                    test_acc = (pred[data.test_mask] == data.y[data.test_mask]).float().mean().item()
+                
+                print(f'Epoch {epoch:03d} | Loss: {loss.item():.4f} | '
+                      f'Train: {train_acc:.4f} | Val: {val_acc:.4f} | Test: {test_acc:.4f}')
+                
+                if val_acc > best_val_metric:
+                    best_val_metric = val_acc
+                    best_model_state = copy.deepcopy(model.state_dict())
+        
         if loss.item() < best_loss:
             best_loss = loss.item()
-            best_model_state = copy.deepcopy(model.state_dict())
+            if best_model_state is None:
+                best_model_state = copy.deepcopy(model.state_dict())
 
     if best_model_state is None:
         best_model_state = copy.deepcopy(model.state_dict())
 
-    torch.save(best_model_state, 'models/{}_{}_model.pth'.format(data_name, model_name))
+    model_path = 'models/{}_{}_model.pth'.format(data_name, model_name)
+    torch.save(best_model_state, model_path)
 
-    print('Seed: ' + str(config['random_seed']))
-    print('Dataset: ' + str(config['data_name']))
-    print('Model: ' + str(config['model_name']))
+    print('\n' + '='*60)
+    print('Training complete!')
+    print(f'Seed: {config["random_seed"]}')
+    print(f'Dataset: {config["data_name"]}')
+    print(f'Model: {config["model_name"]}')
+    print(f'Best validation metric: {best_val_metric:.4f}')
+    print(f'Model saved to: {model_path}')
+    print('='*60)
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:

@@ -19,12 +19,14 @@ import json
 import os
 from typing import Dict, List, Tuple, Any
 
+import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from utils import load_config, set_seed, dataset_func, get_save_path
+from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_constraint_coverage
 from model import get_model
 from apxchase import ApxChase
+from exhaustchase import ExhaustChase
 from constraints import get_constraints
 
 from Edge_masking import mask_edges_by_constraints
@@ -209,18 +211,41 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
     os.makedirs(save_root, exist_ok=True)
 
     witness_summaries: List[Dict[str, Any]] = []
+    fidelity_scores: List[float] = []
+    conciseness_scores: List[float] = []
+    original_num_edges = int(masked_graph.edge_index.size(1))
+    
     for w_idx, witness in enumerate(witnesses):
         conc = chaser.conc_fn(witness)
         rpr = chaser.rpr_fn(witness)
         num_edges = int(witness.edge_index.size(1))
+        
+        # 计算 Fidelity-
+        fid_minus = compute_fidelity_minus(chaser.model, masked_graph, witness, device)
+        fidelity_scores.append(fid_minus)
+        
+        # 计算 Conciseness: 1 - (witness边数 / 原图边数)
+        conciseness = 1.0 - (num_edges / original_num_edges) if original_num_edges > 0 else 0.0
+        conciseness_scores.append(conciseness)
+        
         summary = {
             "index": w_idx,
             "num_nodes": int(witness.num_nodes if witness.num_nodes is not None else witness.x.size(0)),
             "num_edges": num_edges,
             "conc": float(conc),
             "rpr": float(rpr),
+            "fidelity_minus": float(fid_minus),
+            "conciseness": float(conciseness),
         }
         witness_summaries.append(summary)
+
+    # 计算平均 Fidelity- 和 Conciseness
+    avg_fidelity = float(np.mean(fidelity_scores)) if len(fidelity_scores) > 0 else 0.0
+    avg_conciseness = float(np.mean(conciseness_scores)) if len(conciseness_scores) > 0 else 0.0
+    
+    # 计算 Coverage ratio
+    total_constraints = len(constraints)
+    coverage_ratio = len(coverage_names) / total_constraints if total_constraints > 0 else 0.0
 
     metrics: Dict[str, Any] = {
         "graph_dataset_index": dataset_idx,
@@ -232,17 +257,22 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
         "num_witnesses": len(witnesses),
         "coverage_size": len(coverage_names),
         "covered_constraints": coverage_names,
+        "total_constraints": total_constraints,
+        "coverage_ratio": float(coverage_ratio),
         "witnesses": witness_summaries,
+        "avg_fidelity_minus": avg_fidelity,
+        "avg_conciseness": avg_conciseness,
+        "original_num_edges": original_num_edges,
     }
 
     with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
         json.dump(metrics, fp, indent=2)
 
     torch.save(masked_graph.cpu(), os.path.join(save_root, f"masked_graph_{dataset_idx}.pt"))
-    return elapsed, len(witnesses)
+    return elapsed, len(witnesses), avg_fidelity, avg_conciseness, coverage_ratio
 
 
-def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], dataset: Any, constraints: List[dict], config: Dict[str, Any], device: torch.device, model: torch.nn.Module) -> Tuple[float, int]:
+def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], dataset: Any, constraints: List[dict], config: Dict[str, Any], device: torch.device, model: torch.nn.Module) -> Tuple[float, int, float]:
     graph, dataset_idx = _select_test_graph(dataset_resource, dataset, pos)
     base_graph = _prepare_graph_for_model(graph)
 
@@ -265,6 +295,40 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
     t1 = time.time()
     elapsed = t1 - t0
 
+    # 计算 Fidelity-, Conciseness 和 Coverage (使用edge_mask生成的子图)
+    edge_mask = res.get("edge_mask")
+    fidelity_minus = 0.0
+    conciseness = 0.0
+    coverage_ratio = 0.0
+    covered_constraints = []
+    original_num_edges = int(masked_graph.edge_index.size(1))
+    
+    if edge_mask is not None:
+        # 选择top-k的边构建解释子图
+        k = config.get("gnnexplainer_topk", 10)
+        edge_mask_flat = edge_mask.flatten()
+        topk_indices = torch.topk(edge_mask_flat, min(k, len(edge_mask_flat))).indices
+        
+        # 构建包含top-k边的子图
+        selected_edges = masked_graph.edge_index[:, topk_indices]
+        subgraph = Data(
+            x=masked_graph.x.clone(),
+            edge_index=selected_edges,
+            batch=masked_graph.batch.clone() if hasattr(masked_graph, 'batch') else None
+        )
+        
+        # 计算fidelity
+        fidelity_minus = compute_fidelity_minus(model, masked_graph, subgraph, device)
+        
+        # 计算 Conciseness: 1 - (解释边数 / 原图边数)
+        num_explanation_edges = int(selected_edges.size(1))
+        conciseness = 1.0 - (num_explanation_edges / original_num_edges) if original_num_edges > 0 else 0.0
+        
+        # 计算 Coverage: 使用与ApxChase相同的constraint matching逻辑
+        Budget = config.get("Budget", 8)
+        subgraph_cpu = subgraph.cpu()
+        covered_constraints, coverage_ratio = compute_constraint_coverage(subgraph_cpu, constraints, Budget)
+
     save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
     os.makedirs(save_root, exist_ok=True)
 
@@ -276,19 +340,25 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
         "dropped_edges": dropped_edges,
         "method": "GNNExplainer",
         "edge_mask_topk": int(res.get("k", 0)),
+        "avg_fidelity_minus": float(fidelity_minus),
+        "avg_conciseness": float(conciseness),
+        "coverage_size": len(covered_constraints),
+        "covered_constraints": covered_constraints,
+        "total_constraints": len(constraints),
+        "coverage_ratio": float(coverage_ratio),
+        "original_num_edges": original_num_edges,
     }
     with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
         json.dump(metrics, fp, indent=2)
 
     # Persist the raw mask for future analysis
-    edge_mask = res.get("edge_mask")
     if edge_mask is not None:
         torch.save(edge_mask.detach().cpu(), os.path.join(save_root, f"edge_mask_gnnexplainer_{dataset_idx}.pt"))
 
-    return elapsed, 1  # treat one explanation per graph
+    return elapsed, 1, fidelity_minus, conciseness, coverage_ratio  # treat one explanation per graph
 
 
-def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], dataset: Any, constraints: List[dict], config: Dict[str, Any], device: torch.device, model: torch.nn.Module, pg_state: Dict[str, Any]) -> Tuple[float, int]:
+def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], dataset: Any, constraints: List[dict], config: Dict[str, Any], device: torch.device, model: torch.nn.Module, pg_state: Dict[str, Any]) -> Tuple[float, int, float]:
     graph, dataset_idx = _select_test_graph(dataset_resource, dataset, pos)
     base_graph = _prepare_graph_for_model(graph)
 
@@ -340,6 +410,40 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
     
     elapsed = explain_time  # 保持与原代码一致，只记录解释时间
 
+    # 计算 Fidelity-, Conciseness 和 Coverage (使用edge_mask生成的子图)
+    edge_mask = res.get("edge_mask")
+    fidelity_minus = 0.0
+    conciseness = 0.0
+    coverage_ratio = 0.0
+    covered_constraints = []
+    original_num_edges = int(masked_graph.edge_index.size(1))
+    
+    if edge_mask is not None:
+        # 选择top-k的边构建解释子图
+        k = config.get("pgexplainer_topk", 10)
+        edge_mask_flat = edge_mask.flatten()
+        topk_indices = torch.topk(edge_mask_flat, min(k, len(edge_mask_flat))).indices
+        
+        # 构建包含top-k边的子图
+        selected_edges = masked_graph.edge_index[:, topk_indices]
+        subgraph = Data(
+            x=masked_graph.x.clone(),
+            edge_index=selected_edges,
+            batch=masked_graph.batch.clone() if hasattr(masked_graph, 'batch') else None
+        )
+        
+        # 计算fidelity
+        fidelity_minus = compute_fidelity_minus(model, masked_graph, subgraph, device)
+        
+        # 计算 Conciseness: 1 - (解释边数 / 原图边数)
+        num_explanation_edges = int(selected_edges.size(1))
+        conciseness = 1.0 - (num_explanation_edges / original_num_edges) if original_num_edges > 0 else 0.0
+        
+        # 计算 Coverage: 使用与ApxChase相同的constraint matching逻辑
+        Budget = config.get("Budget", 8)
+        subgraph_cpu = subgraph.cpu()
+        covered_constraints, coverage_ratio = compute_constraint_coverage(subgraph_cpu, constraints, Budget)
+
     save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
     os.makedirs(save_root, exist_ok=True)
 
@@ -351,6 +455,13 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
         "dropped_edges": dropped_edges,
         "method": "PGExplainer",
         "edge_mask_topk": int(res.get("k", 0)),
+        "avg_fidelity_minus": float(fidelity_minus),
+        "avg_conciseness": float(conciseness),
+        "coverage_size": len(covered_constraints),
+        "covered_constraints": covered_constraints,
+        "total_constraints": len(constraints),
+        "coverage_ratio": float(coverage_ratio),
+        "original_num_edges": original_num_edges,
     }
     with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
         json.dump(metrics, fp, indent=2)
@@ -359,7 +470,129 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
     if edge_mask is not None:
         torch.save(edge_mask.detach().cpu(), os.path.join(save_root, f"edge_mask_pgexplainer_{dataset_idx}.pt"))
 
-    return elapsed, 1
+    return elapsed, 1, fidelity_minus, conciseness, coverage_ratio
+
+
+def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], dataset: Any, constraints: List[dict], config: Dict[str, Any], device: torch.device, chaser: ExhaustChase, verbose: bool = False) -> Tuple[float, int]:
+    """
+    Run ExhaustChase on a single graph. Similar to _run_one_graph_apxchase,
+    but includes the exhaustive enforcement overhead in the timing.
+    """
+    graph, dataset_idx = _select_test_graph(dataset_resource, dataset, pos)
+    true_label = int(graph.y.item()) if hasattr(graph, "y") and graph.y is not None else None
+
+    base_graph = _prepare_graph_for_model(graph)
+    if verbose:
+        _debug_scan_head_matches(base_graph, constraints, tag="original")
+
+    masked_graph, dropped_edges = mask_edges_by_constraints(
+        base_graph,
+        constraints,
+        max_masks=config.get("max_masks", 1),
+        seed=config.get("random_seed"),
+    )
+    if verbose:
+        _debug_scan_head_matches(masked_graph, constraints, tag="masked")
+    masked_graph._clean = base_graph
+    masked_graph.y = graph.y.clone()
+
+    masked_graph = _graph_to_device(masked_graph, device)
+    with torch.no_grad():
+        logits = chaser.model(masked_graph)
+        probs = torch.softmax(logits, dim=-1).squeeze(0)
+        y_ref = logits.argmax(dim=-1)
+    masked_graph.y_ref = y_ref.detach()
+
+    if verbose:
+        print(f"[DEBUG] Model logits: {logits.detach().cpu().numpy().tolist()}")
+        print(f"[DEBUG] Class probabilities: {probs.detach().cpu().numpy().tolist()}")
+
+    # ExhaustChase returns enforce_time separately, but we include it in total time
+    t0 = time.time()
+    Sigma_star, witnesses, enforce_time = chaser.explain_graph(masked_graph)
+    t1 = time.time()
+    total_elapsed = t1 - t0
+    candidate_gen_time = total_elapsed - enforce_time
+
+    coverage_names: List[str] = []
+    for constraint in Sigma_star:
+        if isinstance(constraint, dict) and "name" in constraint:
+            coverage_names.append(constraint["name"])
+        else:
+            coverage_names.append(str(constraint))
+    coverage_names = sorted(set(coverage_names))
+
+    # Simplified output for batch processing
+    print(f"[ExhaustChase] Graph {dataset_idx}: total={total_elapsed:.4f}s (enforce={enforce_time:.4f}s, gen={candidate_gen_time:.4f}s), witnesses={len(witnesses)}, coverage={len(coverage_names)}")
+
+    save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
+    os.makedirs(save_root, exist_ok=True)
+
+    witness_summaries: List[Dict[str, Any]] = []
+    fidelity_scores: List[float] = []
+    conciseness_scores: List[float] = []
+    original_num_edges = int(masked_graph.edge_index.size(1))
+    
+    for w_idx, witness in enumerate(witnesses):
+        conc = chaser.conc_fn(witness)
+        rpr = chaser.rpr_fn(witness)
+        num_edges = int(witness.edge_index.size(1))
+        
+        # 计算 Fidelity-
+        fid_minus = compute_fidelity_minus(chaser.model, masked_graph, witness, device)
+        fidelity_scores.append(fid_minus)
+        
+        # 计算 Conciseness: 1 - (witness边数 / 原图边数)
+        conciseness = 1.0 - (num_edges / original_num_edges) if original_num_edges > 0 else 0.0
+        conciseness_scores.append(conciseness)
+        
+        summary = {
+            "index": w_idx,
+            "num_nodes": int(witness.num_nodes if witness.num_nodes is not None else witness.x.size(0)),
+            "num_edges": num_edges,
+            "conc": float(conc),
+            "rpr": float(rpr),
+            "fidelity_minus": float(fid_minus),
+            "conciseness": float(conciseness),
+        }
+        witness_summaries.append(summary)
+
+    # 计算平均 Fidelity- 和 Conciseness
+    avg_fidelity = float(np.mean(fidelity_scores)) if len(fidelity_scores) > 0 else 0.0
+    avg_conciseness = float(np.mean(conciseness_scores)) if len(conciseness_scores) > 0 else 0.0
+    
+    # 计算 Coverage ratio
+    total_constraints = len(constraints)
+    coverage_ratio = len(coverage_names) / total_constraints if total_constraints > 0 else 0.0
+
+    metrics: Dict[str, Any] = {
+        "graph_dataset_index": dataset_idx,
+        "true_label": true_label,
+        "predicted_label": int(y_ref.item()),
+        "prediction_confidence": probs.tolist(),
+        "num_dropped_edges": len(dropped_edges),
+        "dropped_edges": dropped_edges,
+        "num_witnesses": len(witnesses),
+        "coverage_size": len(coverage_names),
+        "covered_constraints": coverage_names,
+        "total_constraints": total_constraints,
+        "coverage_ratio": float(coverage_ratio),
+        "witnesses": witness_summaries,
+        "avg_fidelity_minus": avg_fidelity,
+        "avg_conciseness": avg_conciseness,
+        "original_num_edges": original_num_edges,
+        "enforce_time": float(enforce_time),
+        "candidate_gen_time": float(candidate_gen_time),
+        "total_time": float(total_elapsed),
+    }
+
+    with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
+        json.dump(metrics, fp, indent=2)
+
+    torch.save(masked_graph.cpu(), os.path.join(save_root, f"masked_graph_{dataset_idx}.pt"))
+    
+    # Return total elapsed time (including enforcement overhead)
+    return total_elapsed, len(witnesses), avg_fidelity, avg_conciseness, coverage_ratio
 
 
 def main() -> None:
@@ -417,31 +650,90 @@ def main() -> None:
     total_time = 0.0
     total_expl = 0
     per_graph_counts: List[int] = []
+    fidelity_scores: List[float] = []
+    conciseness_scores: List[float] = []
+    coverage_scores: List[float] = []
 
     if exp_name.startswith("apxchase"):  # original pipeline
         for pos in test_positions:
-            elapsed, count = _run_one_graph_apxchase(pos, dataset_resource, dataset, constraints, config, device, chaser)
+            elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_apxchase(pos, dataset_resource, dataset, constraints, config, device, chaser)
             total_time += elapsed
             total_expl += count
             per_graph_counts.append(count)
+            fidelity_scores.append(avg_fid)
+            conciseness_scores.append(avg_conc)
+            coverage_scores.append(cov)
 
     elif exp_name.startswith("gnnexplainer"):  # GNNExplainer baseline on masked graphs
         for pos in test_positions:
-            elapsed, count = _run_one_graph_gnnexplainer(pos, dataset_resource, dataset, constraints, config, device, model)
+            elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_gnnexplainer(pos, dataset_resource, dataset, constraints, config, device, model)
             total_time += elapsed
             total_expl += count
             per_graph_counts.append(count)
+            fidelity_scores.append(avg_fid)
+            conciseness_scores.append(avg_conc)
+            coverage_scores.append(cov)
 
     elif exp_name.startswith("pgexplainer"):  # PGExplainer baseline on masked graphs
         pg_state: Dict[str, Any] = {}
         for pos in test_positions:
-            elapsed, count = _run_one_graph_pgexplainer(pos, dataset_resource, dataset, constraints, config, device, model, pg_state)
+            elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_pgexplainer(pos, dataset_resource, dataset, constraints, config, device, model, pg_state)
             total_time += elapsed
             total_expl += count
             per_graph_counts.append(count)
+            fidelity_scores.append(avg_fid)
+            conciseness_scores.append(avg_conc)
+            coverage_scores.append(cov)
+
+    elif exp_name.startswith("exhaustchase"):  # ExhaustChase baseline with full enforcement
+        exhaust_chaser = ExhaustChase(
+            model=model,
+            Sigma=constraints,
+            L=config.get("L", 2),
+            k=config.get("k", 10),
+            B=config.get("Budget", 4),
+            alpha=config.get("alpha", 1.0),
+            beta=config.get("beta", 1.0),
+            gamma=config.get("gamma", 1.0),
+            max_enforce_iterations=config.get("max_enforce_iterations", 100),
+            debug=False,
+        )
+        # Only show verbose output for single graph runs
+        verbose = len(test_positions) == 1
+        for pos in test_positions:
+            elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_exhaustchase(pos, dataset_resource, dataset, constraints, config, device, exhaust_chaser, verbose=verbose)
+            total_time += elapsed
+            total_expl += count
+            per_graph_counts.append(count)
+            fidelity_scores.append(avg_fid)
+            conciseness_scores.append(avg_conc)
+            coverage_scores.append(cov)
+
+    elif exp_name.startswith("heuchase"):
+        from heuchase import HeuChase
+        chaser = HeuChase(
+            model=model,
+            Sigma=constraints,
+            L=config.get("L", 2),
+            k=config.get("k", 10),
+            B=config.get("Budget", 4),
+            alpha=config.get("alpha", 1.0),
+            beta=config.get("beta", 1.0),
+            gamma=config.get("gamma", 1.0),
+            m=config.get("heuchase_m", 6),
+            debug=False,
+        )
+        for pos in test_positions:
+            elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_apxchase(pos, dataset_resource, dataset, constraints, config, device, chaser)
+            total_time += elapsed
+            total_expl += count
+            per_graph_counts.append(count)
+            fidelity_scores.append(avg_fid)
+            conciseness_scores.append(avg_conc)
+            coverage_scores.append(cov)
 
     else:
-        raise ValueError(f"Unknown exp_name '{exp_name}'. Expected one of: apxchase_mutag, gnnexplainer_mutag, pgexplainer_mutag")
+        raise ValueError(f"Unknown exp_name '{exp_name}'. Expected one of: apxchase_mutag, exhaustchase_mutag, heuchase_mutag, gnnexplainer_mutag, pgexplainer_mutag")
 
     # === Final aggregate stats over the run ===
     num_graphs_run = len(test_positions)
@@ -454,6 +746,36 @@ def main() -> None:
     if total_expl > 0:
         print(f"Avg time per explanation (s): {total_time / total_expl:.6f}")
     print(f"Explanations per graph: {per_graph_counts}")
+    
+    # === Fidelity- Statistics ===
+    if len(fidelity_scores) > 0:
+        overall_avg_fidelity = float(np.mean(fidelity_scores))
+        print(f"\n===== Fidelity- Statistics =====")
+        print(f"Overall Average Fidelity-: {overall_avg_fidelity:.6f}")
+        print(f"Fidelity- per graph: {[f'{f:.4f}' for f in fidelity_scores]}")
+        print(f"Min Fidelity-: {min(fidelity_scores):.6f}")
+        print(f"Max Fidelity-: {max(fidelity_scores):.6f}")
+        print(f"Std Fidelity-: {float(np.std(fidelity_scores)):.6f}")
+    
+    # === Conciseness Statistics ===
+    if len(conciseness_scores) > 0:
+        overall_avg_conciseness = float(np.mean(conciseness_scores))
+        print(f"\n===== Conciseness Statistics =====")
+        print(f"Overall Average Conciseness: {overall_avg_conciseness:.6f}")
+        print(f"Conciseness per graph: {[f'{c:.4f}' for c in conciseness_scores]}")
+        print(f"Min Conciseness: {min(conciseness_scores):.6f}")
+        print(f"Max Conciseness: {max(conciseness_scores):.6f}")
+        print(f"Std Conciseness: {float(np.std(conciseness_scores)):.6f}")
+    
+    # === Coverage Statistics ===
+    if len(coverage_scores) > 0:
+        overall_avg_coverage = float(np.mean(coverage_scores))
+        print(f"\n===== Coverage Statistics =====")
+        print(f"Overall Average Coverage: {overall_avg_coverage:.6f} ({overall_avg_coverage*100:.2f}%)")
+        print(f"Coverage per graph: {[f'{c:.4f}' for c in coverage_scores]}")
+        print(f"Min Coverage: {min(coverage_scores):.6f} ({min(coverage_scores)*100:.2f}%)")
+        print(f"Max Coverage: {max(coverage_scores):.6f} ({max(coverage_scores)*100:.2f}%)")
+        print(f"Std Coverage: {float(np.std(coverage_scores)):.6f}")
 
 
 if __name__ == "__main__":

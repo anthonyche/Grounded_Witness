@@ -1,0 +1,91 @@
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_geometric/typing.py:86: UserWarning: An issue occurred while importing 'torch-scatter'. Disabling its usage. Stacktrace: dlopen(/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_scatter/_version_cpu.so, 0x0006): Symbol not found: __ZN3c1017RegisterOperatorsD1Ev
+  Referenced from: <31686B36-D5B9-3F96-BE6F-18559CB72904> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_scatter/_version_cpu.so
+  Expected in:     <3FE16EFD-B5EE-33D2-A4C8-2BD93F2AA7BA> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch/lib/libtorch_cpu.dylib
+  warnings.warn(f"An issue occurred while importing 'torch-scatter'. "
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_geometric/typing.py:97: UserWarning: An issue occurred while importing 'torch-cluster'. Disabling its usage. Stacktrace: dlopen(/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_cluster/_version_cpu.so, 0x0006): Symbol not found: __ZN3c1017RegisterOperatorsD1Ev
+  Referenced from: <10423C9E-95B1-347C-B0F0-E4D7A7308210> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_cluster/_version_cpu.so
+  Expected in:     <3FE16EFD-B5EE-33D2-A4C8-2BD93F2AA7BA> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch/lib/libtorch_cpu.dylib
+  warnings.warn(f"An issue occurred while importing 'torch-cluster'. "
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_geometric/typing.py:113: UserWarning: An issue occurred while importing 'torch-spline-conv'. Disabling its usage. Stacktrace: dlopen(/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_spline_conv/_version_cpu.so, 0x0006): Symbol not found: __ZN3c1017RegisterOperatorsD1Ev
+  Referenced from: <9E655B3A-04F0-395C-8B62-279C85ADE2B5> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_spline_conv/_version_cpu.so
+  Expected in:     <3FE16EFD-B5EE-33D2-A4C8-2BD93F2AA7BA> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch/lib/libtorch_cpu.dylib
+  warnings.warn(
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_geometric/typing.py:124: UserWarning: An issue occurred while importing 'torch-sparse'. Disabling its usage. Stacktrace: dlopen(/opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_sparse/_version_cpu.so, 0x0006): Symbol not found: __ZN3c1017RegisterOperatorsD1Ev
+  Referenced from: <47BF2734-6D6C-3534-AAFB-203A01E790E9> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch_sparse/_version_cpu.so
+  Expected in:     <3FE16EFD-B5EE-33D2-A4C8-2BD93F2AA7BA> /opt/homebrew/Caskroom/miniforge/base/lib/python3.10/site-packages/torch/lib/libtorch_cpu.dylib
+  warnings.warn(f"An issue occurred while importing 'torch-sparse'. "
+[model.py] Running from: /Users/anthonyche/Desktop/Research/GroundingGEXP/src/model.py
+[DEBUG] Loaded 8 constraints:
+  - c6_closure (head_edges=3, body_edges=3)
+  - c6_closure_2 (head_edges=2, body_edges=4)
+  - c6_closure_3 (head_edges=4, body_edges=2)
+  - nitro_on_aromatic_completion (head_edges=1, body_edges=2)
+  - di-oxy_on_Carbon (head_edges=1, body_edges=1)
+  - ether_like_completion (head_edges=1, body_edges=1)
+  - halogen_anchor_completion (head_edges=1, body_edges=1)
+  - amine_di_carbon_completion (head_edges=1, body_edges=1)
+[ExhaustChase] 迭代 20: 修复了 73 个违规, 图边数: 110
+[ExhaustChase] 迭代 40: 修复了 73 个违规, 图边数: 170
+[ExhaustChase] Graph 39: total=4.2030s (enforce=0.8151s, gen=3.3879s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 134 个违规, 图边数: 93
+[ExhaustChase] 迭代 40: 修复了 134 个违规, 图边数: 93
+[ExhaustChase] Graph 149: total=11.7405s (enforce=5.5047s, gen=6.2357s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 86 个违规, 图边数: 70
+[ExhaustChase] 迭代 40: 修复了 86 个违规, 图边数: 70
+[ExhaustChase] Graph 61: total=4.8037s (enforce=2.8350s, gen=1.9687s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 91 个违规, 图边数: 176
+[ExhaustChase] 迭代 40: 修复了 91 个违规, 图边数: 276
+[ExhaustChase] Graph 32: total=10.7142s (enforce=1.4558s, gen=9.2584s), witnesses=4, coverage=6
+[ExhaustChase] 迭代 20: 修复了 34 个违规, 图边数: 31
+[ExhaustChase] 迭代 40: 修复了 34 个违规, 图边数: 31
+[ExhaustChase] Graph 184: total=0.7778s (enforce=0.5969s, gen=0.1808s), witnesses=4, coverage=5
+[ExhaustChase] 迭代 20: 修复了 38 个违规, 图边数: 36
+[ExhaustChase] 迭代 40: 修复了 38 个违规, 图边数: 36
+[ExhaustChase] Graph 91: total=0.9450s (enforce=0.6880s, gen=0.2570s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 22 个违规, 图边数: 44
+[ExhaustChase] 迭代 40: 修复了 22 个违规, 图边数: 44
+[ExhaustChase] Graph 99: total=0.6173s (enforce=0.3830s, gen=0.2344s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 22 个违规, 图边数: 28
+[ExhaustChase] 迭代 40: 修复了 22 个违规, 图边数: 28
+[ExhaustChase] Graph 101: total=0.3555s (enforce=0.2490s, gen=0.1065s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 110 个违规, 图边数: 420
+[ExhaustChase] 迭代 40: 修复了 110 个违规, 图边数: 780
+[ExhaustChase] Graph 85: total=36.0649s (enforce=1.6214s, gen=34.4435s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 102 个违规, 图边数: 72
+[ExhaustChase] 迭代 40: 修复了 102 个违规, 图边数: 72
+[ExhaustChase] Graph 46: total=7.5277s (enforce=4.4011s, gen=3.1266s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 6 个违规, 图边数: 20
+[ExhaustChase] 迭代 40: 修复了 6 个违规, 图边数: 20
+[ExhaustChase] Graph 183: total=0.1164s (enforce=0.0763s, gen=0.0401s), witnesses=3, coverage=3
+[ExhaustChase] 迭代 20: 修复了 3 个违规, 图边数: 18
+[ExhaustChase] 迭代 40: 修复了 3 个违规, 图边数: 18
+[ExhaustChase] Graph 173: total=0.0971s (enforce=0.0634s, gen=0.0336s), witnesses=3, coverage=3
+[ExhaustChase] 迭代 20: 修复了 24 个违规, 图边数: 40
+[ExhaustChase] 迭代 40: 修复了 24 个违规, 图边数: 40
+[ExhaustChase] Graph 92: total=0.5045s (enforce=0.3360s, gen=0.1685s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 6 个违规, 图边数: 20
+[ExhaustChase] 迭代 40: 修复了 6 个违规, 图边数: 20
+[ExhaustChase] Graph 82: total=0.1203s (enforce=0.0791s, gen=0.0412s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 4 个违规, 图边数: 18
+[ExhaustChase] 迭代 40: 修复了 4 个违规, 图边数: 18
+[ExhaustChase] Graph 146: total=0.0979s (enforce=0.0657s, gen=0.0322s), witnesses=3, coverage=3
+[ExhaustChase] 迭代 20: 修复了 24 个违规, 图边数: 26
+[ExhaustChase] 迭代 40: 修复了 24 个违规, 图边数: 26
+[ExhaustChase] Graph 54: total=0.2547s (enforce=0.1695s, gen=0.0852s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 22 个违规, 图边数: 39
+[ExhaustChase] 迭代 40: 修复了 22 个违规, 图边数: 39
+[ExhaustChase] Graph 124: total=0.4618s (enforce=0.3225s, gen=0.1393s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 176 个违规, 图边数: 114
+[ExhaustChase] 迭代 40: 修复了 176 个违规, 图边数: 114
+[ExhaustChase] Graph 177: total=31.4209s (enforce=15.0265s, gen=16.3944s), witnesses=4, coverage=4
+[ExhaustChase] 迭代 20: 修复了 86 个违规, 图边数: 170
+[ExhaustChase] 迭代 40: 修复了 86 个违规, 图边数: 270
+[ExhaustChase] Graph 41: total=9.7000s (enforce=1.3042s, gen=8.3958s), witnesses=4, coverage=6
+
+===== Aggregate Stats over Test Split Run =====
+Graphs processed: 19
+Total explanations across graphs: 73
+Total runtime (s): 120.5230
+Avg time per graph (s): 6.343315
+Avg time per explanation (s): 1.651000
+Explanations per graph: [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 3, 4, 4, 4, 4]

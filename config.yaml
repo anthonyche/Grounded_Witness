@@ -1,31 +1,54 @@
-# exp_name: apxchase_mutag
 # exp_name: pgexplainer_mutag
-exp_name: apxchase_mutag
+# exp_name: gnnexplainer_mutag
+# exp_name: apxchase_mutag
+# exp_name: heuchase_mutag
+exp_name: pgexplainer_mutag
 random_seed: 42
 
 # ---- Experiment hyperparameters ----
 L: 3             # hop / num GNN layers
-k: 4       # window size
+k: 6      # window size
 Budget: 8        # repair budget (1,2,4,6,8)
 alpha: 1.0
 beta: 1.0
 gamma: 1.0
 max_masks : 4
+m: 6 #num of candidates for heuchase
 
 # ---- GNN Model ----
-model_name: "gcn_graph_3" # gat_graph, gcn_graph, change along with L
+model_name: "gcn" # gat_graph, gcn_graph, change along with L
 hidden_dim: 32
 
 # ---- Data ----
-data_name: "MUTAG"
-data_size: 188          # total number of graphs
-input_dim: 7
-output_dim: 2
-batch_size: 32
-train_ratio: 0.8
-val_ratio: 0.1
-test_ratio: 0.1
-num_test: 0
+# data_name: "MUTAG"
+# data_size: 188          # total number of graphs
+# input_dim: 7
+# output_dim: 2
+# batch_size: 32
+# train_ratio: 0.8
+# val_ratio: 0.1
+# test_ratio: 0.1
+# num_test: 0
+
+data_name: "Yelp"
+data_size: 716847
+num_edges: 13954819
+input_dim: 300
+output_dim: 100
+num_test: 143370  # 20% of nodes for testing
+batch_size: 128
+target_nodes: [0,1,2,3,4,5,6,7,8,9,
+       10,11,12,13,14,15,16,17,18,19,
+       20,21,22,23,24,25,26,27,28,29,
+       30,31,32,33,34,35,36,37,38,39,
+       40,41,42,43,44,45,46,47,48,49,
+       50,51,52,53,54,55,56,57,58,59,
+       60,61,62,63,64,65,66,67,68,69,
+       70,71,72,73,74,75,76,77,78,79,
+       80,81,82,83,84,85,86,87,88,89,
+       90,91,92,93,
+       94,95,96,97,98,99] # set of target nodes to be explained
+
 
 # # ---- Training ----
 # num_epochs: 200
@@ -54,4 +77,5 @@ num_test: 0
 
 # 可选
 graph_index: 2   # 不传 --input 时回退用
-save_dir: results/mutag_apxchase  # 不传 --output 时回退用
+# save_dir: results/mutag_exhaustchase  # 不传 --output 时回退用
+max_enforce_iterations: 50  # Maximum iterations for exhaustive enforcement (reduced for faster testing)
