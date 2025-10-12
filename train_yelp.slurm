@@ -43,8 +43,8 @@ module load cuda/11.8
 module load cudnn/8.6.0
 
 # Alternatively, if using conda:
-# module load anaconda3
-# source activate your_env_name
+# module load Miniconda3
+# source activate skyexp
 
 echo "Loaded modules:"
 module list
