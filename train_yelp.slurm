@@ -76,7 +76,7 @@ echo "Starting Yelp GNN Training..."
 echo "=========================================="
 echo ""
 
-python src/model.py config.yaml output
+python src/Train_Yelp_HPC_GCN.py
 
 # Capture exit code
 EXIT_CODE=$?
