@@ -20,7 +20,7 @@ def _data_to_nx(Gs: Any) -> nx.Graph:
     """
     将传入的子图 Gs 归一化为无向 NetworkX 图，
     并在每个节点属性中写入：
-      - label: 来自 one-hot 节点特征的 argmax
+      - label: 来自 one-hot 节点特征的 argmax，或使用预设的 node_labels
     支持两种最常见输入：
       1) PyG Data 对象（含 x: Tensor, edge_index: Tensor[2, E]）
       2) 轻量结构：具有 .x (Tensor[N, F]) 和 .edges (List[Tuple[int,int]])
@@ -28,10 +28,19 @@ def _data_to_nx(Gs: Any) -> nx.Graph:
     G = nx.Graph()
 
     # 处理节点与标签
-    if hasattr(Gs, 'x') and isinstance(Gs.x, torch.Tensor):
+    # First, check if we have explicit node_labels attribute (for datasets without discrete labels)
+    if hasattr(Gs, 'node_labels') and isinstance(Gs.node_labels, torch.Tensor):
+        labels = Gs.node_labels.tolist()
+        for i, lab in enumerate(labels):
+            G.add_node(int(i), label=int(lab))
+    elif hasattr(Gs, 'x') and isinstance(Gs.x, torch.Tensor):
         x = Gs.x
-        # argmax 作为节点类型/标签
-        labels = x.argmax(dim=-1).tolist()
+        # For datasets with discrete labels (one-hot), use argmax
+        # For feature-based datasets (like Yelp), assign dummy label 0 (all nodes same type)
+        if x.size(1) <= 10:  # Heuristic: likely one-hot encoding
+            labels = x.argmax(dim=-1).tolist()
+        else:  # Likely continuous features - assign dummy label
+            labels = [0] * x.size(0)
         for i, lab in enumerate(labels):
             G.add_node(int(i), label=int(lab))
     else:
@@ -237,7 +246,7 @@ def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int],
 # 计算 Γ(Gs, B) ：在预算内可“落地”的约束集合（按名字返回）
 # ------------------------------
 
-def Gamma(Gs: Any, B: int, tgd_list: List[Dict[str, Any]]) -> Set[str]:
+def Gamma(Gs: Any, B: int, tgd_list: List[Dict[str, Any]], max_matches_per_tgd: int = 5) -> Set[str]:
     """
     返回：在子图 Gs 上、在预算 B 内能够“grounded”的约束名称集合。
     做法：
@@ -249,6 +258,9 @@ def Gamma(Gs: Any, B: int, tgd_list: List[Dict[str, Any]]) -> Set[str]:
     for tgd in tgd_list:
         name = tgd.get('name', 'unnamed')
         matches = find_head_matches(Gs, tgd)
+        # Limit matches to avoid combinatorial explosion
+        if len(matches) > max_matches_per_tgd:
+            matches = matches[:max_matches_per_tgd]
         ok = False
         for bind in matches:
             feasible, rep, _ = backchase_repair_cost(Gs, tgd, bind, B)

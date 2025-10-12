@@ -26,9 +26,12 @@ from torch_geometric.utils import k_hop_subgraph, to_undirected
 
 # Try multiple import paths so this works whether the module is imported as
 # `src.apxchase` or plain `apxchase`.
-
-from constraints import get_constraints  # optional
-from matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+try:
+    from constraints import get_constraints  # optional
+    from matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+except ImportError:
+    from .constraints import get_constraints  # optional
+    from .matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
 
 
 def _constraint_names(constraints) -> List[str]:
@@ -78,7 +81,9 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
             if y_ref is None:
                 factual_ok = True
             else:
-                factual_ok = (y_ref[int(v_t)] == y_hat[int(v_t)])
+                # Use the relabeled target node ID in the subgraph
+                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
+                factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id])
         else:
             y_hat = out.argmax(dim=-1)
             y_ref = getattr(Gs, 'y_ref', None)
@@ -117,8 +122,9 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
             if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
                 y_hat_minus = out_minus.argmax(dim=-1)
                 y_hat_gs = out.argmax(dim=-1)
-                # Counterfactual: prediction flips for v_t
-                counterfactual_ok = (y_hat_gs[int(v_t)] != y_hat_minus[int(v_t)])
+                # Counterfactual: prediction flips for v_t (use relabeled ID)
+                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
+                counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id])
             else:
                 y_hat_minus = out_minus.argmax(dim=-1)
                 y_hat_gs = out.argmax(dim=-1)
@@ -551,14 +557,16 @@ class ExhaustChase:
     # ------------------------------ Internal logic ------------------------------
     def _prepare_subgraph(self, data: Data, v_t: int) -> Data:
         """Extract L-hop subgraph around v_t (node task)."""
-        node_idx, ei, _, _ = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
+        node_idx, ei, mapping, _ = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
         x = data.x[node_idx] if getattr(data, 'x', None) is not None else None
         out = Data(x=x, edge_index=ei)
         out._nodes_in_full = node_idx.clone()
         out.num_nodes = int(node_idx.numel())
-        # carry y_ref if provided (for verify_witness default)
+        # Store the target node's ID in the subgraph (after relabeling)
+        out._target_node_subgraph_id = int(mapping.item())
+        # carry y_ref if provided (for verify_witness default) - extract only subgraph nodes
         if hasattr(data, 'y_ref'):
-            out.y_ref = data.y_ref
+            out.y_ref = data.y_ref[node_idx]  # Only extract labels for nodes in subgraph
         if hasattr(data, 'batch'):
             out.batch = torch.zeros(out.num_nodes, dtype=torch.long, device=ei.device)
         out.E_base = out.edge_index.size(1)

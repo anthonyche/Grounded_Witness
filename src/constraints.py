@@ -248,9 +248,184 @@ CONSTRAINTS_MUTAG.append(TGD_HALOGEN_ANCHOR)
 validate_tgd(TGD_AMINE_DI_C)
 CONSTRAINTS_MUTAG.append(TGD_AMINE_DI_C)  
 
+# ----------------------------------------------------------------------
+# constraints for Yelp (Node Classification)
+# ----------------------------------------------------------------------
+# Yelp is a user-business review graph with node features but no explicit labels.
+# We define TGDs based on frequent patterns/motifs in social review networks:
+#   1. Triangle closure (social cohesion)
+#   2. Star patterns (popular businesses)
+#   3. Bipartite patterns (user-business interactions)
+# 
+# Since Yelp nodes don't have discrete type labels like MUTAG, we use:
+#   - Feature-based clustering (if needed in the future)
+#   - For now, we use placeholder "any" type: {"in": list(range(100))}
+#     (assuming 100 output classes, can be refined)
+
+# Helper: Create "any node" type constraint (matches any node)
+
+# TGD 1: Triangle Closure
+# If nodes A-B-C form a path, they should form a triangle (A-C edge)
+# This captures social cohesion / transitive relationships
+TGD_YELP_TRIANGLE_CLOSURE = {
+    "name": "yelp_triangle_closure",
+    "body": {   # Observed: A-B-C path
+        "nodes": {
+            "A":{"in": [0]},  # Match any node (all have label 0)
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+        },
+        "edges": [("A", "B"), ("B", "C")],
+        "distinct": ["A", "B", "C"]
+    },
+    "head": {   # Expected: A-C edge should exist
+        "nodes": {
+            "A":{"in": [0]},
+            "C":{"in": [0]},
+        },
+        "edges": [("A", "C")],
+        "distinct": ["A", "C"]
+    }
+}
+
+# TGD 2: Triangle Completion (Reverse)
+# If A-C and B-C edges exist, A-B should also exist
+TGD_YELP_TRIANGLE_COMPLETE = {
+    "name": "yelp_triangle_complete",
+    "body": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+        },
+        "edges": [("A", "C"), ("B", "C")],
+        "distinct": ["A", "B", "C"]
+    },
+    "head": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+        },
+        "edges": [("A", "B")],
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 3: Square/Cycle Closure
+# If nodes form a 3-path A-B-C-D, they should close to a 4-cycle (A-D edge)
+TGD_YELP_SQUARE_CLOSURE = {
+    "name": "yelp_square_closure",
+    "body": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+            "D":{"in": [0]},
+        },
+        "edges": [("A", "B"), ("B", "C"), ("C", "D")],
+        "distinct": ["A", "B", "C", "D"]
+    },
+    "head": {
+        "nodes": {
+            "A":{"in": [0]},
+            "D":{"in": [0]},
+        },
+        "edges": [("A", "D")],
+        "distinct": ["A", "D"]
+    }
+}
+
+# TGD 4: Star Pattern - Hub Node Connectivity
+# If a node H connects to A and B, then A and B might also connect (community structure)
+TGD_YELP_STAR_TO_CLIQUE = {
+    "name": "yelp_star_to_clique",
+    "body": {
+        "nodes": {
+            "H":{"in": [0]},  # Hub node
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+        },
+        "edges": [("H", "A"), ("H", "B")],
+        "distinct": ["H", "A", "B"]
+    },
+    "head": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+        },
+        "edges": [("A", "B")],
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 5: Diamond Pattern Closure
+# If A connects to both B and C, and B connects to C, then completing paths
+TGD_YELP_DIAMOND_CLOSURE = {
+    "name": "yelp_diamond_closure",
+    "body": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+            "D":{"in": [0]},
+        },
+        "edges": [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")],
+        "distinct": ["A", "B", "C", "D"]
+    },
+    "head": {
+        "nodes": {
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+        },
+        "edges": [("B", "C")],
+        "distinct": ["B", "C"]
+    }
+}
+
+
+# TGD 6: Mutual Neighbor Connection
+# If A and B both connect to C, they likely share other common neighbors
+TGD_YELP_COMMON_NEIGHBOR = {
+    "name": "yelp_common_neighbor",
+    "body": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+            "C":{"in": [0]},
+        },
+        "edges": [("A", "C"), ("B", "C")],
+        "distinct": ["A", "B", "C"]
+    },
+    "head": {
+        "nodes": {
+            "A":{"in": [0]},
+            "B":{"in": [0]},
+            "D":{"in": [0]},
+        },
+        "edges": [("A", "D"), ("B", "D")],
+        "distinct": ["A", "B", "D"]
+    }
+}
+
+# Validate and register Yelp constraints
+CONSTRAINTS_YELP: List[TGD] = []
+validate_tgd(TGD_YELP_TRIANGLE_CLOSURE)
+CONSTRAINTS_YELP.append(TGD_YELP_TRIANGLE_CLOSURE)
+validate_tgd(TGD_YELP_TRIANGLE_COMPLETE)
+CONSTRAINTS_YELP.append(TGD_YELP_TRIANGLE_COMPLETE)
+validate_tgd(TGD_YELP_SQUARE_CLOSURE)
+CONSTRAINTS_YELP.append(TGD_YELP_SQUARE_CLOSURE)
+validate_tgd(TGD_YELP_STAR_TO_CLIQUE)
+CONSTRAINTS_YELP.append(TGD_YELP_STAR_TO_CLIQUE)
+validate_tgd(TGD_YELP_DIAMOND_CLOSURE)
+CONSTRAINTS_YELP.append(TGD_YELP_DIAMOND_CLOSURE)
+validate_tgd(TGD_YELP_COMMON_NEIGHBOR)
+CONSTRAINTS_YELP.append(TGD_YELP_COMMON_NEIGHBOR)
+
 # Central registry by dataset key.
 _REGISTRY: Dict[str, List[TGD]] = {
     'MUTAG': CONSTRAINTS_MUTAG,
+    'YELP': CONSTRAINTS_YELP,
     # 'BASHAPE': [...],   # placeholder for future constraints
     # 'ATLAS': [...],
 }
@@ -272,5 +447,6 @@ __all__ = [
     'LABEL_ID',
     'TGD_C6_CLOSURE',
     'CONSTRAINTS_MUTAG',
+    'CONSTRAINTS_YELP',
     'get_constraints',
 ]
