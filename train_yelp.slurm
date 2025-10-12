@@ -36,15 +36,10 @@ echo "  GPU: $CUDA_VISIBLE_DEVICES"
 echo ""
 
 # Load required modules (adjust for your HPC environment)
-# Example for typical HPC setups:
-module purge
-module load python/3.10
-module load cuda/11.8
-module load cudnn/8.6.0
 
 # Alternatively, if using conda:
-# module load Miniconda3
-# source activate skyexp
+module load Miniconda3
+source activate skyexp
 
 echo "Loaded modules:"
 module list
