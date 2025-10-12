@@ -1,0 +1,50 @@
+{
+  "timestamp": "2025-10-11 23:14:27",
+  "total_time": 120.95318174362183,
+  "config": {
+    "data_root": "./datasets",
+    "epochs": 200,
+    "lr": 0.005,
+    "weight_decay": 0.0005,
+    "hidden_dim": 32,
+    "patience": 50
+  },
+  "models": [
+    {
+      "model_name": "gcn1",
+      "training_time": 32.802095890045166,
+      "best_epoch": 10,
+      "best_val_metric": 0.910926342010498,
+      "test_exact": 0.01837204396724701,
+      "test_hamming": 0.9107977747917175,
+      "success": true,
+      "error": null
+    },
+    {
+      "model_name": "gcn2",
+      "training_time": 38.996312379837036,
+      "best_epoch": 20,
+      "best_val_metric": 0.910926342010498,
+      "test_exact": 0.01837204396724701,
+      "test_hamming": 0.9107977747917175,
+      "success": true,
+      "error": null
+    },
+    {
+      "model_name": "gcn3",
+      "training_time": 47.79574751853943,
+      "best_epoch": 20,
+      "best_val_metric": 0.910926342010498,
+      "test_exact": 0.01837204396724701,
+      "test_hamming": 0.9107977747917175,
+      "success": true,
+      "error": null
+    }
+  ],
+  "successful_models": [
+    "gcn1",
+    "gcn2",
+    "gcn3"
+  ],
+  "failed_models": []
+}
