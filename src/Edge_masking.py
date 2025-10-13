@@ -156,6 +156,78 @@ def mask_edges_by_constraints(
     return new_data, to_drop
 
 
+def mask_edges_for_node_classification(
+    data: Data,
+    target_node: int,
+    constraints: List[TGD],
+    num_hops: int = 2,
+    max_masks: int = 1,
+    seed: int | None = None,
+    prefer_longer_heads: bool = True,
+) -> Tuple[Data, List[Tuple[int, int]], torch.Tensor]:
+    """
+    Extract L-hop subgraph around target node and apply constraint-based edge masking.
+    
+    Args:
+        data: Full graph Data (node classification)
+        target_node: Node index to explain
+        constraints: TGD list
+        num_hops: L-hop neighborhood size
+        max_masks: Max edges to remove
+        seed: Random seed
+        prefer_longer_heads: Prioritize longer HEAD patterns
+        
+    Returns:
+        (masked_subgraph, dropped_edges, node_subset)
+        masked_subgraph: L-hop subgraph with edges masked
+        dropped_edges: List of dropped edge pairs (in subgraph IDs)
+        node_subset: Original node IDs in the subgraph
+    """
+    from torch_geometric.utils import k_hop_subgraph
+    
+    # Step 1: Extract L-hop subgraph
+    node_subset, edge_index_sub, mapping, edge_mask = k_hop_subgraph(
+        node_idx=target_node,
+        num_hops=num_hops,
+        edge_index=data.edge_index,
+        relabel_nodes=True,
+        num_nodes=data.num_nodes,
+    )
+    
+    # Step 2: Build subgraph Data object
+    x_sub = data.x[node_subset]
+    y_sub = data.y[node_subset] if hasattr(data, 'y') and data.y is not None else None
+    
+    # Find target node's new ID in the subgraph
+    # node_subset contains original node IDs, we need to find where target_node appears
+    target_node_subgraph_id = (node_subset == target_node).nonzero(as_tuple=True)[0].item()
+    
+    subgraph = Data(x=x_sub, edge_index=edge_index_sub)
+    if y_sub is not None:
+        subgraph.y = y_sub
+    subgraph.num_nodes = int(node_subset.numel())
+    subgraph.original_node_ids = node_subset
+    subgraph.target_node_subgraph_id = target_node_subgraph_id
+    subgraph.target_node_original_id = target_node
+    
+    # Step 3: Apply constraint-based masking on the subgraph
+    masked_subgraph, dropped_edges = mask_edges_by_constraints(
+        subgraph,
+        constraints,
+        max_masks=max_masks,
+        seed=seed,
+        prefer_longer_heads=prefer_longer_heads,
+    )
+    
+    # Copy over metadata
+    masked_subgraph.original_node_ids = node_subset
+    masked_subgraph.target_node_subgraph_id = subgraph.target_node_subgraph_id
+    masked_subgraph.target_node_original_id = target_node
+    
+    return masked_subgraph, dropped_edges, node_subset
+
+
 __all__ = [
     "mask_edges_by_constraints",
+    "mask_edges_for_node_classification",
 ]

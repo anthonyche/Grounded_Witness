@@ -329,10 +329,11 @@ def main():
     hidden_dim = config['hidden_dim']
     
     # Models to train: GCN with 1, 2, and 3 layers
+    # Use gcn_yelp_X naming to match config.yaml and Run_Experiment.py expectations
     models_to_train = [
-        ('gcn1', 'GCN 1-layer', GCN_1, {'dropout': 0.5}),
-        ('gcn2', 'GCN 2-layer', GCN_2, {'dropout': 0.5}),
-        ('gcn3', 'GCN 3-layer', GCN_3, {'dropout': 0.5}),
+        ('gcn_yelp_1', 'GCN 1-layer', GCN_1, {'dropout': 0.5}),
+        ('gcn_yelp_2', 'GCN 2-layer', GCN_2, {'dropout': 0.5}),
+        ('gcn_yelp_3', 'GCN 3-layer', GCN_3, {'dropout': 0.5}),
     ]
     
     results = []

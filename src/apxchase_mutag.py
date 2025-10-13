@@ -1,3 +1,22 @@
+"""
+ApxChase-MUTAG: Multi-center streaming edge-insertion chase for MUTAG graphs.
+
+This is a specialized variant for MUTAG case studies that samples multiple
+center nodes and grows candidate subgraphs from each center (inside-out),
+generating more diverse candidates for witness generation.
+
+Key differences from base ApxChase:
+  • Samples N random nodes as centers (default: 10)
+  • For each center, grows edges in hop-distance order (inside-out streaming)
+  • All candidates from all centers are pooled together for window management
+  • This generates more diverse candidates, improving constraint coverage
+
+External hooks (pluggable) — functions with the `_fn` suffix can be overridden by users:
+  - verify_witness_fn(model, v_t, data_subgraph) -> bool
+  - gamma_fn(data_subgraph, Sigma, B) -> Set[Constraint]  (uses matcher.Gamma)
+  - conc_fn(data_subgraph) -> float
+  - rpr_fn(data_subgraph) -> float
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Set, Tuple
@@ -12,22 +31,7 @@ import torch
 from torch import Tensor
 from torch_geometric.data import Data
 from torch_geometric.utils import k_hop_subgraph, to_undirected
-
-# --- Safe NetworkX import ---
-try:
-    import networkx as nx
-    _HAS_NX = True
-except Exception:
-    _HAS_NX = False
-
-# --- Cosine similarity helper ---
-def _cos_sim(a: Tensor, b: Tensor) -> float:
-    if a is None or b is None:
-        return 0.0
-    denom = (a.norm(p=2) * b.norm(p=2)).item()
-    if denom == 0.0:
-        return 0.0
-    return float(torch.dot(a, b).item() / denom)
+import networkx as nx
 
 # Try multiple import paths so this works whether the module is imported as
 # `src.apxchase` or plain `apxchase`.
@@ -66,7 +70,7 @@ class WindowEntry:
 
 # ------------------------------- Default hooks --------------------------------
 
-def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
+def _default_verify_witness(model, v_t: Optional[int], Gs: Data, debug=False) -> bool:
     """
     Default verifier supporting both factual and counterfactual checks.
     - Gs is the candidate subgraph.
@@ -79,9 +83,11 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
     with torch.no_grad():
         # --- Factual: prediction unchanged on Gs vs y_ref ---
         # Determine if model expects (x, edge_index) or Data object
+        # is_node_model: True if model expects (x, edge_index) for node classification
+        #                False if model expects Data object for graph classification
         model_class_name = model.__class__.__name__
         is_node_model = (hasattr(Gs, 'task') and Gs.task == 'node') or \
-                       any(name in model_class_name for name in ['GCN_', 'GAT_Yelp', 'SAGE_Yelp', 'GraphSAGE']) or \
+                       any(name in model_class_name for name in ['GCN_Yelp', 'GAT_Yelp', 'SAGE_Yelp']) or \
                        (not any(word in model_class_name for word in ['Classifier', 'Graph']))
         
         if is_node_model:
@@ -93,20 +99,36 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
         
         factual_ok = False
         if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
+            # For multi-label: check if ANY label matches (or use sigmoid > 0.5)
+            # For multi-class: use argmax
             y_ref = getattr(Gs, 'y_ref', None)
             if y_ref is None:
+                if debug:
+                    print(f"[VerifyDebug] No y_ref found, factual=True by default")
                 factual_ok = True
             else:
                 target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                # Check if multi-label (output_dim > 1 and not using softmax)
-                if out.dim() > 1 and out.size(-1) > 1:
+                if debug:
+                    print(f"[VerifyDebug] Factual check: target_id={target_subgraph_id}, |V|={Gs.num_nodes}, |E|={Gs.edge_index.size(1)}")
+                    print(f"[VerifyDebug] y_ref shape={y_ref.shape}, out shape={out.shape}")
+                    print(f"[VerifyDebug] y_ref[{target_subgraph_id}] dtype={y_ref[target_subgraph_id].dtype}, dim={y_ref[target_subgraph_id].dim()}")
+                # FIX: Check if y_ref is multi-dimensional (multi-label) or scalar (multi-class)
+                # Multi-label: y_ref has shape [num_nodes, num_classes]
+                # Multi-class: y_ref has shape [num_nodes] (scalar labels)
+                is_multilabel = y_ref.dim() > 1 or (y_ref[target_subgraph_id].dim() > 0 and y_ref[target_subgraph_id].numel() > 1)
+                if is_multilabel:
                     # Multi-label: use sigmoid
                     y_hat = (torch.sigmoid(out) > 0.5).float()
+                    # For multi-label, check if predictions match (can use hamming or exact)
                     factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).all()
+                    if debug:
+                        print(f"[VerifyDebug] Multi-label: y_ref[{target_subgraph_id}]={y_ref[target_subgraph_id]}, y_hat[{target_subgraph_id}]={y_hat[target_subgraph_id]}, match={factual_ok}")
                 else:
                     # Multi-class: use argmax
                     y_hat = out.argmax(dim=-1)
                     factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id])
+                    if debug:
+                        print(f"[VerifyDebug] Multi-class: y_ref[{target_subgraph_id}]={y_ref[target_subgraph_id].item()}, y_hat[{target_subgraph_id}]={y_hat[target_subgraph_id].item()}, match={factual_ok}")
         else:
             # Graph classification
             y_hat = out.argmax(dim=-1)
@@ -151,19 +173,26 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
                 out_minus = model(H_minus)
             
             if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
-                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                # Check if multi-label
-                if out.dim() > 1 and out.size(-1) > 1:
+                # FIX: For counterfactual, use H_minus's target ID (same as H), not Gs's remapped ID
+                # H_minus and H_full have same nodes; Gs is a subset with remapped IDs
+                target_id_in_H = getattr(H_minus, '_target_node_subgraph_id', 
+                                        getattr(H_full, '_target_node_subgraph_id', 0))
+                target_id_in_Gs = getattr(Gs, '_target_node_subgraph_id', 0)
+                # FIX: Check y_ref to determine if multi-label or multi-class
+                y_ref = getattr(Gs, 'y_ref', None)
+                is_multilabel = (y_ref is not None and 
+                                (y_ref.dim() > 1 or (y_ref[target_id_in_Gs].dim() > 0 and y_ref[target_id_in_Gs].numel() > 1)))
+                if is_multilabel:
                     # Multi-label: use sigmoid
                     y_hat_minus = (torch.sigmoid(out_minus) > 0.5).float()
                     y_hat_gs = (torch.sigmoid(out) > 0.5).float()
-                    # Counterfactual: ANY label flips
-                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id]).any()
+                    # Counterfactual: ANY label flips (compare H_minus[H_id] vs Gs[Gs_id])
+                    counterfactual_ok = (y_hat_gs[target_id_in_Gs] != y_hat_minus[target_id_in_H]).any()
                 else:
                     # Multi-class: use argmax
                     y_hat_minus = out_minus.argmax(dim=-1)
                     y_hat_gs = out.argmax(dim=-1)
-                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id])
+                    counterfactual_ok = (y_hat_gs[target_id_in_Gs] != y_hat_minus[target_id_in_H])
             else:
                 # Graph classification
                 y_hat_minus = out_minus.argmax(dim=-1)
@@ -199,6 +228,81 @@ def _default_rpr(Gs: Data) -> float:
     return 1.0 - (sum_rep / (m + sum_rep))
 
 # ------------------------------ Utility methods ------------------------------
+
+def _graph_signature(data: Data) -> Tuple:
+    """
+    Compute a canonical signature for a graph to detect duplicates.
+    Returns a tuple of (sorted_edges, node_count) for structural comparison.
+    """
+    if data.edge_index.numel() == 0:
+        return (tuple(), int(data.num_nodes))
+    
+    # Convert to undirected edge set and sort for canonical form
+    ei = data.edge_index.cpu().numpy()
+    edges = set()
+    for i in range(ei.shape[1]):
+        u, v = int(ei[0, i]), int(ei[1, i])
+        # Normalize edge direction for undirected comparison
+        edges.add((min(u, v), max(u, v)))
+    
+    return (tuple(sorted(edges)), int(data.num_nodes))
+
+
+def _is_connected_subgraph(data: Data, root: Optional[int] = None, debug: bool = False) -> bool:
+    """
+    Check if a subgraph is connected (for graph-level) or contains root in largest component (for node-level).
+    
+    For graph-level (root=None): Accept if graph has only one connected component.
+    For node-level: Accept if root is in the largest connected component.
+    """
+    num_edges = data.edge_index.size(1) if data.edge_index.numel() > 0 else 0
+    
+    if num_edges == 0:
+        # No edges - only accept if single node (root)
+        result = data.num_nodes <= 1
+        if debug:
+            print(f"[ConnCheck] No edges: |V|={data.num_nodes}, accepting={result}")
+        return result
+    
+    # Build NetworkX graph for connectivity check
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    
+    ei = data.edge_index.cpu().numpy()
+    for i in range(ei.shape[1]):
+        u, v = int(ei[0, i]), int(ei[1, i])
+        G.add_edge(u, v)
+    
+    # Get connected components
+    components = list(nx.connected_components(G))
+    
+    # Check if all nodes are covered by edges
+    nodes_in_edges = set()
+    for i in range(ei.shape[1]):
+        nodes_in_edges.add(int(ei[0, i]))
+        nodes_in_edges.add(int(ei[1, i]))
+    isolated_nodes = set(range(data.num_nodes)) - nodes_in_edges
+    
+    if debug:
+        print(f"[ConnCheck] |V|={data.num_nodes}, |E|={num_edges}, components={len(components)}, root={root}")
+        print(f"[ConnCheck] Nodes in edges: {len(nodes_in_edges)}, Isolated nodes: {len(isolated_nodes)}")
+        if isolated_nodes:
+            print(f"[ConnCheck] WARNING: Isolated node IDs: {sorted(isolated_nodes)}")
+        if len(components) > 1:
+            print(f"[ConnCheck] Component sizes: {[len(c) for c in components]}")
+    
+    if root is None:
+        # Graph-level: require single connected component AND no isolated nodes
+        return len(components) == 1 and len(isolated_nodes) == 0
+    else:
+        # Node-level: require root in largest component
+        if not components:
+            return False
+        largest_component = max(components, key=len)
+        # Find root's ID in this subgraph
+        root_subgraph_id = getattr(data, '_target_node_subgraph_id', 0)
+        return root_subgraph_id in largest_component and len(isolated_nodes) == 0
+
 
 def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     """
@@ -293,8 +397,8 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     
     data.root = getattr(H, 'root', None)
     data.E_base = getattr(H, 'E_base', None)
-    
     # FIX: recompute _target_node_subgraph_id in candidate subgraph
+    # H.root is the target node ID in H; mapping[H.root] is its new ID in candidate
     root_val = getattr(data, 'root', None)
     if root_val is not None and root_val >= 0:
         # Ensure root_val is within mapping bounds
@@ -341,6 +445,12 @@ def _edge_shells_by_hop(H: Data, root: Optional[int], L: int) -> List[Tensor]:
     # compute node hops from root on undirected graph
     from collections import deque
     N = H.num_nodes if getattr(H, 'num_nodes', None) is not None else int(H.x.size(0))
+    
+    # Validate root index
+    if root < 0 or root >= N:
+        raise ValueError(f"Root node index {root} is out of bounds for graph with {N} nodes. "
+                        f"Expected root in range [0, {N-1}].")
+    
     adj = [[] for _ in range(N)]
     und = to_undirected(ei)
     for u, v in und.t().tolist():
@@ -363,152 +473,6 @@ def _edge_shells_by_hop(H: Data, root: Optional[int], L: int) -> List[Tensor]:
         shells[d-1].append(idx)
     return [torch.tensor(s, dtype=torch.long, device=ei.device) for s in shells]
 
-# --- Embedding extraction helper ---
-def _extract_node_embeddings(model: torch.nn.Module, H: Data) -> Optional[Tensor]:
-    # Try common hooks in order; return Tensor [N, d] or None
-    with torch.no_grad():
-        try:
-            if hasattr(model, 'get_node_embeddings'):
-                emb = model.get_node_embeddings(H)
-                if isinstance(emb, Tensor):
-                    return emb
-        except Exception:
-            pass
-        try:
-            # Try to call model appropriately
-            model_class_name = model.__class__.__name__
-            is_node_model = (hasattr(H, 'task') and H.task == 'node') or \
-                           any(name in model_class_name for name in ['GCN_', 'GAT_Yelp', 'SAGE_Yelp', 'GraphSAGE']) or \
-                           (not any(word in model_class_name for word in ['Classifier', 'Graph']))
-            
-            if is_node_model:
-                # Node classification: model expects (x, edge_index)
-                out = model(H.x, H.edge_index)
-            else:
-                # Graph classification or unknown: model expects Data object
-                out = model(H)
-        except Exception:
-            out = None
-        # Try attributes filled by forward:
-        for name in ('last_node_embeddings', 'node_embeddings', 'last_h', 'h'):
-            if hasattr(model, name):
-                emb = getattr(model, name)
-                if (isinstance(emb, Tensor) and emb.dim() == 2 and
-                    emb.size(0) == (H.num_nodes if getattr(H, 'num_nodes', None) is not None else (H.x.size(0) if getattr(H, 'x', None) is not None else 0))):
-                    return emb
-        # Fall back to H.x
-        if getattr(H, 'x', None) is not None and isinstance(H.x, Tensor):
-            return H.x
-    return None
-
-# --- Edmonds/Chu–Liu candidate generator ---
-def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], noise_std: float = 1e-3):
-    """
-    Returns an edge_mask (Bool[E]) selecting the edges that belong to the
-    (maximum) arborescence component reachable from `root`. If NetworkX is
-    missing or something fails, falls back to a greedy MST-like heuristic.
-    """
-    E = H.edge_index.size(1)
-    if E == 0:
-        return torch.zeros(E, dtype=torch.bool, device=H.edge_index.device)
-
-    device = H.edge_index.device
-    edge_mask = torch.zeros(E, dtype=torch.bool, device=device)
-
-    # Build a directed multigraph with both directions per undirected edge.
-    if not _HAS_NX:
-        # Fallback: select top-degree star around root (or all edges if root None)
-        if root is None:
-            # keep a spanning forest greedily
-            seen = set()
-            for idx in range(E):
-                u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-                if u not in seen or v not in seen:
-                    edge_mask[idx] = True
-                    seen.add(u); seen.add(v)
-            return edge_mask
-    try:
-        import networkx as nx  # local import to keep scope clean
-        G = nx.DiGraph()
-        # Nodes:
-        N = int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else (H.x.size(0) if getattr(H, 'x', None) is not None else 0))
-        for n in range(N):
-            G.add_node(n)
-        # Edge weights = cosine(h_u, h_v) + noise
-        rng = torch.Generator()
-        rng.manual_seed(torch.randint(0, 10_000_000, (1,)).item())
-        eps = torch.randn(E, generator=rng).tolist()
-        for idx in range(E):
-            u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-            w_uv = _cos_sim(emb[u], emb[v]) if emb is not None else 0.0
-            w_vu = _cos_sim(emb[v], emb[u]) if emb is not None else 0.0
-            nse = float(eps[idx]) * noise_std
-            G.add_edge(u, v, weight=w_uv + nse, _eid=idx)
-            G.add_edge(v, u, weight=w_vu + nse, _eid=idx)  # share the same underlying undirected edge id
-
-        # Run Edmonds maximum arborescence
-        # Use modern NetworkX API (Branching class was deprecated)
-        Ar = nx.maximum_spanning_arborescence(G, attr='weight', default=0)
-        
-        # IMPORTANT: nx.maximum_spanning_arborescence does NOT preserve edge attributes!
-        # We need to build a mapping from (u,v) in Ar back to _eid in G
-        edge_to_eid = {}
-        for u, v, data in G.edges(data=True):
-            edge_to_eid[(u, v)] = data.get('_eid', None)
-
-        # If a specific root is requested, keep the reachable component from that root.
-        if root is None:
-            # Pick the TRUE arborescence root: node with in-degree = 0
-            ar_roots = [n for n in Ar.nodes if Ar.in_degree(n) == 0]
-            if ar_roots:
-                root = ar_roots[0]  # Use the actual arborescence root
-            else:
-                # Fallback: pick node with max out-degree
-                root = max(Ar.nodes, key=lambda n: Ar.out_degree(n)) if Ar.number_of_nodes() > 0 else 0
-
-        # Collect underlying undirected edge indices for edges in the arborescence component of `root`
-        if root in Ar:
-            for (u, v) in Ar.out_edges(root):
-                pass  # ensure root exists
-            # BFS over Ar starting at root:
-            from collections import deque
-            dq = deque([root])
-            seen = set([root])
-            while dq:
-                u = dq.popleft()
-                for _, v in Ar.out_edges(u):
-                    # Look up the edge ID from our mapping
-                    eid = edge_to_eid.get((u, v), None)
-                    if eid is not None:
-                        edge_mask[eid] = True
-                    if v not in seen:
-                        seen.add(v); dq.append(v)
-        # If still empty (e.g., root isolated), connect greedily by picking incident edges of root
-        if edge_mask.sum().item() == 0 and E > 0:
-            r = int(root)
-            # pick top-k edges adjacent to r (all of them here)
-            for idx in range(E):
-                u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-                if u == r or v == r:
-                    edge_mask[idx] = True
-        return edge_mask
-    except Exception:
-        # Robust fallback as above
-        if root is None:
-            seen = set()
-            for idx in range(E):
-                u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-                if u not in seen or v not in seen:
-                    edge_mask[idx] = True
-                    seen.add(u); seen.add(v)
-        else:
-            r = int(root)
-            for idx in range(E):
-                u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-                if u == r or v == r:
-                    edge_mask[idx] = True
-        return edge_mask
-
 # --------------------------------- Core class ---------------------------------
 
 class ApxChase:
@@ -527,6 +491,7 @@ class ApxChase:
         conc_fn: Callable[[Data], float] = _default_conc,
         rpr_fn: Callable[[Data], float] = _default_rpr,
         debug: bool = False,
+        num_centers: int = 10,  # NEW: number of center nodes to sample
     ):
         self.model = model
         self.Sigma = Sigma
@@ -538,6 +503,7 @@ class ApxChase:
         self.alpha = alpha # conc weight
         self.beta = beta # rpr weight
         self.gamma = gamma # coverage weight
+        self.num_centers = num_centers  # NEW: multi-center sampling
         self.verify_witness_fn = verify_witness_fn 
         self.conc_fn = conc_fn # conciseness
         self.rpr_fn = rpr_fn # repair penalty
@@ -648,22 +614,27 @@ class ApxChase:
     # ---------------------------- Public entry points ----------------------------
     def explain_node(self, data: Data, v_t: int) -> Tuple[Set, List[Data]]:
         """Run ApxChase for a single target node v_t on PyG Data.
+        The input `data` should already be the L-hop subgraph around v_t.
+        v_t should be the node's ID within this subgraph (after relabeling).
         Returns (Sigma*, S_k).
         """
-        # Check if data is already a prepared subgraph (has target_node_subgraph_id)
-        if hasattr(data, 'target_node_subgraph_id'):
-            # Data is already a prepared subgraph, use it directly
-            H = data.clone()
-        else:
-            # Need to prepare subgraph
-            H = self._prepare_subgraph(data, v_t)
-        
+        # Use the input data directly (it's already the prepared subgraph)
+        H = data.clone()
         H.task = 'node'
         H.root = int(v_t)
+        if not hasattr(H, 'num_nodes'):
+            H.num_nodes = H.x.size(0) if H.x is not None else 0
         self._H_clean = getattr(data, '_clean', data)
         self._log(f"Start explain_node: v_t={v_t}, |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
-            self._log("Matcher not fully available — head-only diagnostics may be skipped.")
+            self._log("Debugging mode — head-only diagnostics may be skipped.")
+            # Print actual constraint names and their HEAD edge counts
+            constraint_info = []
+            for c in self.Sigma:
+                name = c.get('name', 'unnamed')
+                head_edges = len(c.get('head', {}).get('edges', []))
+                constraint_info.append(f"{name}({head_edges}e)")
+            self._log(f"Loaded constraints: {constraint_info}")
         return self._run(H, root=v_t)
 
     def explain_graph(self, data: Data) -> Tuple[Set, List[Data]]:
@@ -681,7 +652,7 @@ class ApxChase:
         # If the caller attached an attribute `_clean` (unmasked), use it;
         # otherwise fall back to the current masked graph.
         self._H_clean = getattr(data, '_clean', data)
-        self._log(f"Start explain_graph: |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
+        self._log(f"Start explain_graph on MASKED graph: |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
             self._log("Matcher not fully available — head-only diagnostics may be skipped.")
         return self._run(H, root=None)
@@ -699,19 +670,54 @@ class ApxChase:
         # carry y_ref if provided (for verify_witness default) - extract only subgraph nodes
         if hasattr(data, 'y_ref'):
             out.y_ref = data.y_ref[node_idx]  # Only extract labels for nodes in subgraph
+        # carry y (true labels) for matcher
+        if hasattr(data, 'y'):
+            out.y = data.y[node_idx]  # Extract true labels for subgraph nodes
+        # carry y_type (KMeans cluster labels) for TGD matching
+        if hasattr(data, 'y_type'):
+            out.y_type = data.y_type[node_idx]  # Extract type labels for subgraph nodes
         if hasattr(data, 'batch'):
             out.batch = torch.zeros(out.num_nodes, dtype=torch.long, device=ei.device)
         out.E_base = out.edge_index.size(1)
+        out.root = v_t  # Store original target node ID (in full graph)
+        out.task = 'node'
         return out
 
-    def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set) -> Set:
-        """Update streaming window per paper's UpdateWindow.
+    def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set, seen_signatures: Optional[Set] = None) -> Set:
+        """
+        Update streaming window with improved policies for case studies.
+        
+        IMPROVEMENTS:
+        1. Deduplication: Skip structurally identical graphs (same edge set)
+        2. Connectivity enforcement: Only accept connected subgraphs
+        3. Relaxed admission: Any candidate grounding constraints can compete
+        4. Score-based ranking: delta = alpha*conc + beta*rpr + gamma*coverage
+        
         Returns the updated coverage set Γ(W_k).
         """
+        # IMPROVEMENT 1: Check connectivity (reject disconnected subgraphs)
+        root_for_check = getattr(self, '_H_full', None)
+        root_id = getattr(root_for_check, 'root', None) if root_for_check is not None else None
+        
+        if not _is_connected_subgraph(Gs, root=root_id, debug=self.debug):
+            if self.debug:
+                self._log(f"Skip: disconnected subgraph (|V|={Gs.num_nodes}, |E|={Gs.edge_index.size(1)//2})")
+            return covered
+        
+        # IMPROVEMENT 2: Check for duplicate structure
+        if seen_signatures is not None:
+            sig = _graph_signature(Gs)
+            if sig in seen_signatures:
+                if self.debug:
+                    self._log(f"Skip: duplicate structure detected (|V|={Gs.num_nodes}, |E|={Gs.edge_index.size(1)//2})")
+                return covered
+            # Mark as seen (will be added to set if admitted)
+        
         # Use the candidate itself for head matching / Γ evaluation
         H_view = Gs
         if self.debug:
-            self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
+            self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)//2}")
+        
         # Detailed debug: per-constraint head-only match counts on this candidate view
         if self.debug:
             if find_head_matches is None:
@@ -734,106 +740,322 @@ class ApxChase:
                 nonzero = [(n, c) for (n, c) in per_counts if c > 0]
                 top5 = sorted(nonzero, key=lambda x: -x[1])[:5]
                 self._log(f"HEAD matches on candidate: total={total_hits}; top={top5}")
+        
         # Compute Gamma on candidate itself
         Gamma_G = self.gamma_fn(H_view, self.Sigma, self.B)
-        new_cov = Gamma_G - covered
+        
         if self.debug:
             names_all = _constraint_names(Gamma_G)
-            names_new = _constraint_names(new_cov)
-            self._log(f"Gamma(G)={len(Gamma_G)} (new={len(new_cov)}); names(new)={names_new[:6]}{'...' if len(names_new)>6 else ''}")
+            self._log(f"Gamma(G)={len(Gamma_G)}; names={names_all[:6]}{'...' if len(names_all)>6 else ''}")
+        
+        # Reject if NO constraints are grounded
         if len(Gamma_G) == 0:
-            self._log("Skip: no grounded constraints on this candidate.")
+            if self.debug:
+                self._log("Skip: no grounded constraints on this candidate.")
             return covered
-        if len(new_cov) == 0:
-            self._log("Skip: grounded constraints bring no *new* coverage vs window.")
-            return covered
-        # compute marginal score (conc/rpr on Gs)
+        
+        # Compute score based on TOTAL coverage (not just new coverage)
+        # This allows candidates with overlapping constraint coverage to compete
         conc = self.conc_fn(Gs)
         rpr = self.rpr_fn(Gs)
-        delta = self.alpha * conc + self.beta * rpr + self.gamma * (len(new_cov) / max(1, len(self.Sigma)))
+        coverage_ratio = len(Gamma_G) / max(1, len(self.Sigma))
+        delta = self.alpha * conc + self.beta * rpr + self.gamma * coverage_ratio
+        
         if self.debug:
-            self._log(f"Scores: conc={conc:.4f}, rpr={rpr:.4f}, delta={delta:.4f}")
+            self._log(f"Scores: conc={conc:.4f}, rpr={rpr:.4f}, coverage={coverage_ratio:.4f} ({len(Gamma_G)}/{len(self.Sigma)}), delta={delta:.4f}")
+        
         entry = WindowEntry(delta, Gs)
+        
+        # Window management: maintain top-k by delta score
         if len(W_k) < self.k:
+            # Window not full - always admit
             heapq.heappush(W_k, entry.as_tuple())
-            self._log(f"Heap push (|W_k| -> {len(W_k)}).")
-            covered = covered | new_cov
+            if self.debug:
+                self._log(f"Heap push (|W_k| -> {len(W_k)}).")
+            # Update global coverage tracking
+            covered = covered | Gamma_G
+            # Mark signature as seen
+            if seen_signatures is not None:
+                seen_signatures.add(_graph_signature(Gs))
         else:
+            # Window full - compete with worst candidate
             if delta > W_k[0][0]:
-                self._log(f"Heap replace: popped min delta={W_k[0][0]:.4f}, pushed delta={delta:.4f}.")
+                if self.debug:
+                    self._log(f"Heap replace: popped min delta={W_k[0][0]:.4f}, pushed delta={delta:.4f}.")
                 heapq.heapreplace(W_k, entry.as_tuple())
-                covered = covered | new_cov
+                # Update global coverage tracking
+                covered = covered | Gamma_G
+                # Mark signature as seen
+                if seen_signatures is not None:
+                    seen_signatures.add(_graph_signature(Gs))
             else:
-                self._log(f"Skip: delta={delta:.4f} <= heap-min={W_k[0][0]:.4f}.")
+                if self.debug:
+                    self._log(f"Skip: delta={delta:.4f} <= heap-min={W_k[0][0]:.4f}.")
+        
         return covered
 
-    def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
-        # shells of edge indices
-        shells = _edge_shells_by_hop(H, root=root, L=self.L)
-        self._log(f"Edge shells: {len(shells)} levels; total edges M={H.edge_index.size(1)}")
+    def _run_multi_center(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
+        """
+        Multi-center BFS-style edge insertion for MUTAG case studies.
+        
+        Strategy:
+        1. Iterate through ALL nodes in the graph as potential centers
+        2. For each center, perform BFS-style edge expansion to maintain connectivity
+        3. Each expansion step (adding one edge) produces a candidate subgraph
+        4. All candidates compete for window admission based on weighted score
+        5. Deduplication ensures structurally unique witnesses
+        
+        This ensures:
+        - All explanation subgraphs are connected
+        - Comprehensive exploration of the graph structure
+        - Diverse witnesses with different constraint patterns
+        """
+        M = H.edge_index.size(1)
+        N = H.num_nodes if getattr(H, 'num_nodes', None) is not None else int(H.x.size(0))
+        
+        self._log(f"Start BFS multi-center streaming on MASKED graph: |V(H)|={N}, |E(H)|={M}")
+        self._log(f"Note: BFS will grow candidates FROM masked graph edges (ensuring connectivity)")
+        
         # Store full masked/induced graph for reuse in _update_window
         self._H_full = H
-        # state edge mask (on H.edge_index)
-        M = H.edge_index.size(1)
-        edge_mask = torch.zeros(M, dtype=torch.bool, device=H.edge_index.device)
-        current_nodes = torch.tensor([int(root)], dtype=torch.long, device=H.edge_index.device) if root is not None else torch.tensor([], dtype=torch.long, device=H.edge_index.device)
+        
+        # Use ALL nodes as centers (not random sampling)
+        center_nodes = torch.arange(N, device=H.edge_index.device)
+        self._log(f"Processing {N} center nodes (all nodes in graph)")
+        
+        # Global window and coverage tracking
         W_k: List[Tuple[float, Data]] = []
         covered: Set = set()
+        seen_signatures: Set = set()  # Track seen graph structures for deduplication
+        
+        # Statistics
+        total_candidates = 0
+        total_verified = 0
+        total_admitted = 0
+        total_rejected_dup = 0
+        total_rejected_disconnected = 0
+        
+        # Build adjacency list for BFS
+        import networkx as nx
+        G_nx = nx.Graph()
+        G_nx.add_nodes_from(range(N))
+        ei = H.edge_index.cpu().numpy()
+        edge_list = []
+        for i in range(ei.shape[1]):
+            u, v = int(ei[0, i]), int(ei[1, i])
+            G_nx.add_edge(u, v)
+            edge_list.append((u, v, i))  # Store edge index for masking
+        
+        # Process each center node
+        for center_idx, center in enumerate(center_nodes):
+            center_id = int(center.item())
+            
+            # Log progress every 5 centers or for first/last
+            if self.debug or center_idx == 0 or center_idx == len(center_nodes) - 1 or center_idx % 5 == 0:
+                self._log(f"\n--- Center {center_idx+1}/{N}: node {center_id} ---")
+            
+            # BFS from this center to order edges by distance
+            from collections import deque
+            visited_nodes = {center_id}
+            visited_edges = set()
+            queue = deque([center_id])
+            bfs_edge_order = []  # Edges in BFS order
+            
+            while queue:
+                current = queue.popleft()
+                # Get all neighbors
+                for neighbor in G_nx.neighbors(current):
+                    edge_pair = (min(current, neighbor), max(current, neighbor))
+                    if edge_pair not in visited_edges:
+                        visited_edges.add(edge_pair)
+                        # Find edge index in original edge_index
+                        for u, v, idx in edge_list:
+                            if (min(u, v), max(u, v)) == edge_pair:
+                                bfs_edge_order.append(idx)
+                                break
+                        
+                        if neighbor not in visited_nodes:
+                            visited_nodes.add(neighbor)
+                            queue.append(neighbor)
+            
+            # Now grow subgraph by adding edges in BFS order
+            edge_mask = torch.zeros(M, dtype=torch.bool, device=H.edge_index.device)
+            n_candidates = 0
+            n_verified = 0
+            n_admitted = 0
+            
+            for edge_idx in bfs_edge_order:
+                # Add this edge to the mask
+                edge_mask[edge_idx] = True
+                n_candidates += 1
+                total_candidates += 1
+                
+                if self.debug and n_candidates <= 3:
+                    u, v = H.edge_index[:, edge_idx]
+                    self._log(f"    Candidate #{n_candidates}: add edge ({int(u)},{int(v)}); |E(G_s)|={edge_mask.sum().item()}")
+                
+                # Induce subgraph from current edge set
+                Gs = _induce_subgraph_from_edges(H, edge_mask)
+                
+                # Verify witness
+                ok = self.verify_witness_fn(self.model, root, Gs)
+                
+                if self.debug and n_candidates <= 3:
+                    self._log("      ✓ VerifyWitness=True" if ok else "      ✗ VerifyWitness=False")
+                
+                if ok:
+                    n_verified += 1
+                    total_verified += 1
+                    old_covered = covered
+                    old_window_size = len(W_k)
+                    covered = self._update_window(W_k, Gs, covered, seen_signatures)
+                    
+                    # Check if admitted to window
+                    if len(W_k) > old_window_size or len(covered) > len(old_covered):
+                        n_admitted += 1
+                        total_admitted += 1
+                        if self.debug and n_admitted <= 5:
+                            self._log(f"      → Admitted: coverage |Γ(W_k)|={len(covered)}; heap size={len(W_k)}")
+                    
+                    # Early stopping: if all constraints are grounded, stop
+                    if len(covered) >= len(self.Sigma):
+                        if self.debug:
+                            self._log(f"  Early stop at center {center_idx+1}: all {len(self.Sigma)} constraints grounded!")
+                        break
+            
+            if (self.debug or center_idx % 5 == 0) and n_candidates > 0:
+                self._log(f"  Center {center_idx+1} stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}")
+            
+            # Check early stop condition for center loop
+            if len(covered) >= len(self.Sigma):
+                self._log(f"All constraints covered after {center_idx+1}/{N} centers, stopping early.")
+                break
+        
+        # Fallback: if no candidates admitted, add H itself
+        if len(W_k) == 0:
+            self._log("Fallback: no candidates admitted, adding full graph H")
+            covered = self._update_window(W_k, H, covered)
+        
+        final_nodes = (W_k[0][2].num_nodes if len(W_k) > 0 else 0)
+        self._log(f"\nFinal stats: total_candidates={total_candidates}, total_verified={total_verified}, total_admitted={total_admitted}, |W_k|={len(W_k)}, |Γ(W_k)|={len(covered)}, unique_structures={len(seen_signatures)}, final_nodes={final_nodes}")
+        
+        if len(W_k) == 0 and self.debug:
+            self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking removes head-edges so backchase can trigger.")
+        
+        # Extract and annotate witnesses
+        S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
+        Sigma_star = covered
+        
+        # FINAL VALIDATION: Verify all witnesses are connected
+        if self.debug:
+            self._log("\n=== Final Witness Connectivity Check ===")
+        
+        # Annotate each witness with its grounded constraints (names) and repair sum
+        annotated = []
+        for idx, Gs in enumerate(S_k):
+            # Double-check connectivity
+            is_conn = _is_connected_subgraph(Gs, root=root, debug=self.debug)
+            if not is_conn:
+                if self.debug:
+                    self._log(f"WARNING: Witness #{idx+1} is DISCONNECTED! |V|={Gs.num_nodes}, |E|={Gs.edge_index.size(1)//2}")
+                # Skip disconnected witnesses
+                continue
+            
+            grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
+            try:
+                names = list(grounded_here)
+                rep_val = float(getattr(Gs, '_rep_sum', 0.0))
+                for attr in ('grounded_names', 'grounded', 'grounded_constraints', 'covered_constraints'):
+                    setattr(Gs, attr, names)
+                for attr in ('rep_sum', '_rep_sum'):
+                    setattr(Gs, attr, rep_val)
+                if self.debug:
+                    self._log(f"Witness #{idx+1} OK: grounded ({len(names)}): {names}; rep_sum={rep_val}")
+            except Exception:
+                pass
+            annotated.append(Gs)
+        
+        if self.debug:
+            self._log(f"=== Kept {len(annotated)}/{len(S_k)} connected witnesses ===\n")
+        
+        S_k = annotated
+        return Sigma_star, S_k
+
+    def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
+        """
+        Main run method that delegates to multi-center streaming for graph tasks.
+        For node tasks, falls back to single-center (root-based) streaming.
+        """
+        # For graph-level tasks (MUTAG), use multi-center streaming
+        if root is None or H.task == 'graph':
+            return self._run_multi_center(H, root)
+        
+        # For node-level tasks, use original single-center streaming
+        # (original _run code preserved below)
+        shells = _edge_shells_by_hop(H, root=root, L=self.L)
+        self._log(f"Edge shells: {len(shells)} levels; total edges M={H.edge_index.size(1)}")
+        self._H_full = H
+        M = H.edge_index.size(1)
+        edge_mask = torch.zeros(M, dtype=torch.bool, device=H.edge_index.device)
+        current_nodes = torch.tensor([int(root)], dtype=torch.long, device=H.edge_index.device)
+        W_k: List[Tuple[float, Data]] = []
+        covered: Set = set()
+        seen_signatures: Set = set()  # Track seen graph structures for deduplication
 
         n_candidates = 0
         n_verified = 0
         n_admitted = 0
 
         for shell in shells:
-            # iterate edges in this shell
             for e_idx in (shell if shell.dtype != torch.bool else torch.nonzero(shell, as_tuple=False).flatten()):
-                # enforce connectivity: only add if at least one endpoint already present
                 u, w = H.edge_index[:, e_idx]
                 in_u = (current_nodes == int(u)).any()
                 in_w = (current_nodes == int(w)).any()
-                # Allow free edge insertion for graph-level tasks (root is None),
-                # otherwise enforce connectivity w.r.t. currently grown node set.
-                if (root is None) or (current_nodes.numel() > 0 and (in_u or in_w)):
-                    # spawn new state by inserting this edge
+                if current_nodes.numel() > 0 and (in_u or in_w):
                     edge_mask[e_idx] = True
                     if self.debug:
                         u_i, w_i = int(u), int(w)
                         self._log(f"Candidate #{n_candidates+1}: add edge ({u_i},{w_i}); current |E(G_s)|={edge_mask.sum().item()}")
                     n_candidates += 1
                     Gs = _induce_subgraph_from_edges(H, edge_mask)
-                    ok = self.verify_witness_fn(self.model, root, Gs)
+                    if self.debug and n_candidates == 1:
+                        ok = _default_verify_witness(self.model, root, Gs, debug=True)
+                    else:
+                        ok = self.verify_witness_fn(self.model, root, Gs)
                     if self.debug:
                         self._log("  ✓ VerifyWitness=True" if ok else "  ✗ VerifyWitness=False")
                     if ok:
                         n_verified += 1
                         old_covered = covered
-                        covered = self._update_window(W_k, Gs, covered)
-                        if len(covered) > len(old_covered):
+                        old_window_size = len(W_k)
+                        covered = self._update_window(W_k, Gs, covered, seen_signatures)
+                        if len(W_k) > old_window_size or len(covered) > len(old_covered):
                             n_admitted += 1
                             if self.debug:
                                 self._log(f"  → Admitted: coverage |Γ(W_k)|={len(covered)}; heap size={len(W_k)}")
+                        if len(covered) >= len(self.Sigma):
+                            if self.debug:
+                                self._log(f"Early stop: all {len(self.Sigma)} constraints grounded!")
+                            break
                     current_nodes = torch.unique(torch.cat([current_nodes, torch.tensor([int(u), int(w)], device=current_nodes.device)]))
-                # move on; do not revert the insertion (edge-insertion stream)
+            if len(covered) >= len(self.Sigma):
+                break
         if len(W_k) == 0:
-            # fallback: put H itself if nothing passed verification
-            covered = self._update_window(W_k, H, covered)
+            covered = self._update_window(W_k, H, covered, seen_signatures)
 
         final_nodes = (W_k[0][2].num_nodes if len(W_k) > 0 else 0)
-        self._log(f"Run stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ(W_k)|={len(covered)}, final_nodes={final_nodes}")
+        self._log(f"Run stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ(W_k)|={len(covered)}, unique_structures={len(seen_signatures)}, final_nodes={final_nodes}")
         if len(W_k) == 0 and self.debug:
             self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking removes head-edges so backchase can trigger.")
 
         S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
         Sigma_star = covered
-        # Annotate each witness with its grounded constraints (names) and repair sum
         annotated = []
         for Gs in S_k:
-            # Run Γ on the witness itself (head on Gs; cost vs clean is handled inside gamma_fn)
             grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
             try:
                 names = list(grounded_here)
                 rep_val = float(getattr(Gs, '_rep_sum', 0.0))
-                # Common attribute names used across callers
                 for attr in ('grounded_names', 'grounded', 'grounded_constraints', 'covered_constraints'):
                     setattr(Gs, attr, names)
                 for attr in ('rep_sum', '_rep_sum'):
@@ -845,75 +1067,3 @@ class ApxChase:
             annotated.append(Gs)
         S_k = annotated
         return Sigma_star, S_k
-
-
-# --- HeuChase: Edmonds-based candidate generator ---
-class HeuChase(ApxChase):
-    def __init__(self, *args, m: int = 6, noise_std: float = 1e-3, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.m = int(m)
-        self.noise_std = float(noise_std)
-
-    def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
-        # Prepare references like the parent does
-        self._H_full = H
-        W_k: List[Tuple[float, Data]] = []
-        covered: Set = set()
-
-        # Ensure num_nodes/E_base
-        if getattr(H, 'num_nodes', None) is None and getattr(H, 'x', None) is not None:
-            H.num_nodes = H.x.size(0)
-        if getattr(H, 'E_base', None) is None:
-            H.E_base = H.edge_index.size(1)
-
-        # Extract node embeddings once
-        emb = _extract_node_embeddings(self.model, H)
-
-        n_candidates = 0
-        n_verified = 0
-        n_admitted = 0
-
-        for t in range(self.m):
-            edge_mask = _candidate_by_edmonds(H, root, emb, noise_std=self.noise_std)
-            if edge_mask is None or edge_mask.dtype != torch.bool or edge_mask.numel() != H.edge_index.size(1):
-                # Safety: skip malformed candidates
-                continue
-            n_candidates += 1
-            Gs = _induce_subgraph_from_edges(H, edge_mask)
-            ok = self.verify_witness_fn(self.model, root, Gs)
-            if self.debug:
-                self._log(f"[HeuChase] cand#{t+1}: |E|={edge_mask.sum().item()} -> verify={ok}")
-            if ok:
-                n_verified += 1
-                old_cov = covered
-                covered = self._update_window(W_k, Gs, covered)
-                if len(covered) > len(old_cov):
-                    n_admitted += 1
-                    if self.debug:
-                        self._log(f"[HeuChase]   admitted; |Γ|={len(covered)}, heap={len(W_k)}")
-
-        if len(W_k) == 0:
-            # Fallback: admit H itself
-            covered = self._update_window(W_k, H, covered)
-
-        if self.debug:
-            self._log(f"[HeuChase] stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ|={len(covered)}")
-
-        S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
-        Sigma_star = covered
-
-        # Annotate witnesses with grounded constraints & rep_sum just like parent
-        annotated = []
-        for Gs in S_k:
-            grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
-            try:
-                names = list(grounded_here)
-                rep_val = float(getattr(Gs, '_rep_sum', 0.0))
-                for attr in ('grounded_names', 'grounded', 'grounded_constraints', 'covered_constraints'):
-                    setattr(Gs, attr, names)
-                for attr in ('rep_sum', '_rep_sum'):
-                    setattr(Gs, attr, rep_val)
-            except Exception:
-                pass
-            annotated.append(Gs)
-        return Sigma_star, annotated

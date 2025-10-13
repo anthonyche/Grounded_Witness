@@ -455,6 +455,15 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
         edge_to_eid = {}
         for u, v, data in G.edges(data=True):
             edge_to_eid[(u, v)] = data.get('_eid', None)
+        
+        # Debug: Check arborescence properties
+        DEBUG_EDMONDS = False  # Set to True to enable
+        if DEBUG_EDMONDS:
+            ar_roots = [n for n in Ar.nodes if Ar.in_degree(n) == 0]
+            print(f"[EDMONDS DEBUG] Input G: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+            print(f"[EDMONDS DEBUG] Arborescence Ar: {Ar.number_of_nodes()} nodes, {Ar.number_of_edges()} edges")
+            print(f"[EDMONDS DEBUG] Ar roots (in_degree=0): {ar_roots}")
+            print(f"[EDMONDS DEBUG] Requested root: {root}")
 
         # If a specific root is requested, keep the reachable component from that root.
         if root is None:
@@ -468,12 +477,13 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
 
         # Collect underlying undirected edge indices for edges in the arborescence component of `root`
         if root in Ar:
-            for (u, v) in Ar.out_edges(root):
+            for (u, v, data) in Ar.out_edges(root, data=True):
                 pass  # ensure root exists
             # BFS over Ar starting at root:
             from collections import deque
             dq = deque([root])
             seen = set([root])
+            edges_without_eid = 0
             while dq:
                 u = dq.popleft()
                 for _, v in Ar.out_edges(u):
@@ -481,8 +491,21 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
                     eid = edge_to_eid.get((u, v), None)
                     if eid is not None:
                         edge_mask[eid] = True
+                    else:
+                        edges_without_eid += 1
                     if v not in seen:
                         seen.add(v); dq.append(v)
+            
+            if DEBUG_EDMONDS and edges_without_eid > 0:
+                print(f"[EDMONDS WARN] {edges_without_eid} edges in Ar have no _eid in mapping!")
+            
+            if DEBUG_EDMONDS:
+                num_selected_edges = int(edge_mask.sum().item())
+                print(f"[EDMONDS DEBUG] BFS from root {root} reached {len(seen)}/{Ar.number_of_nodes()} nodes")
+                print(f"[EDMONDS DEBUG] Selected {num_selected_edges}/{E} edges for edge_mask")
+                if len(seen) < Ar.number_of_nodes():
+                    unreached = set(Ar.nodes) - seen
+                    print(f"[EDMONDS DEBUG] Unreached nodes: {sorted(list(unreached)[:10])}")
         # If still empty (e.g., root isolated), connect greedily by picking incident edges of root
         if edge_mask.sum().item() == 0 and E > 0:
             r = int(root)
@@ -916,4 +939,156 @@ class HeuChase(ApxChase):
             except Exception:
                 pass
             annotated.append(Gs)
+        return Sigma_star, annotated
+
+
+# --- HeuChaseMUTAG: Enhanced HeuChase for MUTAG case studies ---
+class HeuChaseMUTAG(HeuChase):
+    """
+    HeuChase variant for MUTAG case studies with improved diversity:
+    
+    IMPROVEMENTS:
+    1. Relaxed admission: Allows candidates even when new_cov == 0 (if score is competitive)
+    2. Variable noise: Each iteration uses progressively different noise levels for diversity
+    3. Score-based ranking: Uses weighted delta = alpha*conc + beta*rpr + gamma*coverage
+    """
+    
+    def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set) -> Set:
+        """
+        RELAXED Update streaming window for case studies.
+        
+        Key difference from parent: Accept candidates with new_cov == 0 if their
+        score is high enough to enter the window. This allows diverse structural
+        variations even when they cover the same constraints.
+        """
+        H_view = Gs
+        if self.debug:
+            self._log(f"[HeuChaseMUTAG] Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
+        
+        # Compute Gamma on candidate
+        Gamma_G = self.gamma_fn(H_view, self.Sigma, self.B)
+        new_cov = Gamma_G - covered
+        
+        if self.debug:
+            names_all = _constraint_names(Gamma_G)
+            names_new = _constraint_names(new_cov)
+            self._log(f"[HeuChaseMUTAG] Gamma(G)={len(Gamma_G)} (new={len(new_cov)}); names(new)={names_new[:6]}{'...' if len(names_new)>6 else ''}")
+        
+        # RELAXED: Skip only if NO constraints are grounded at all
+        if len(Gamma_G) == 0:
+            self._log("[HeuChaseMUTAG] Skip: no grounded constraints on this candidate.")
+            return covered
+        
+        # RELAXED: Even if new_cov == 0, we still compute score and try to enter window
+        # This allows diverse structures that cover the same constraints
+        
+        # Compute marginal score
+        conc = self.conc_fn(Gs)
+        rpr = self.rpr_fn(Gs)
+        # Use total coverage (not just new) for score computation
+        delta = self.alpha * conc + self.beta * rpr + self.gamma * (len(Gamma_G) / max(1, len(self.Sigma)))
+        
+        if self.debug:
+            self._log(f"[HeuChaseMUTAG] Scores: conc={conc:.4f}, rpr={rpr:.4f}, delta={delta:.4f}, new_cov={len(new_cov)}")
+        
+        entry = WindowEntry(delta, Gs)
+        
+        if len(W_k) < self.k:
+            # Window not full: always admit
+            heapq.heappush(W_k, entry.as_tuple())
+            self._log(f"[HeuChaseMUTAG] Heap push (|W_k| -> {len(W_k)}).")
+            covered = covered | new_cov
+        else:
+            # Window full: admit if score beats minimum
+            if delta > W_k[0][0]:
+                self._log(f"[HeuChaseMUTAG] Heap replace: popped min delta={W_k[0][0]:.4f}, pushed delta={delta:.4f}.")
+                heapq.heapreplace(W_k, entry.as_tuple())
+                covered = covered | new_cov
+            else:
+                self._log(f"[HeuChaseMUTAG] Skip: delta={delta:.4f} <= heap-min={W_k[0][0]:.4f}.")
+        
+        return covered
+    
+    def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
+        """
+        Enhanced HeuChase with variable noise for diversity.
+        
+        Each iteration uses a different noise level to explore different
+        parts of the solution space and generate more diverse witnesses.
+        """
+        # Prepare references
+        self._H_full = H
+        W_k: List[Tuple[float, Data]] = []
+        covered: Set = set()
+
+        # Ensure num_nodes/E_base
+        if getattr(H, 'num_nodes', None) is None and getattr(H, 'x', None) is not None:
+            H.num_nodes = H.x.size(0)
+        if getattr(H, 'E_base', None) is None:
+            H.E_base = H.edge_index.size(1)
+
+        # Extract node embeddings once
+        emb = _extract_node_embeddings(self.model, H)
+
+        n_candidates = 0
+        n_verified = 0
+        n_admitted = 0
+
+        # Variable noise levels for diversity
+        # Start with base noise_std, gradually increase for later iterations
+        for t in range(self.m):
+            # Progressive noise: increases every 10 iterations to explore different regions
+            noise_multiplier = 1.0 + (t // 10) * 0.5  # 1.0, 1.5, 2.0, ...
+            current_noise = self.noise_std * noise_multiplier
+            
+            edge_mask = _candidate_by_edmonds(H, root, emb, noise_std=current_noise)
+            if edge_mask is None or edge_mask.dtype != torch.bool or edge_mask.numel() != H.edge_index.size(1):
+                continue
+            
+            n_candidates += 1
+            Gs = _induce_subgraph_from_edges(H, edge_mask)
+            ok = self.verify_witness_fn(self.model, root, Gs)
+            
+            if self.debug:
+                self._log(f"[HeuChaseMUTAG] cand#{t+1}: |E|={edge_mask.sum().item()}, noise={current_noise:.4f} -> verify={ok}")
+            
+            if ok:
+                n_verified += 1
+                old_cov = covered
+                covered = self._update_window(W_k, Gs, covered)
+                if len(covered) > len(old_cov):
+                    n_admitted += 1
+                    if self.debug:
+                        self._log(f"[HeuChaseMUTAG]   admitted with NEW coverage; |Γ|={len(covered)}, heap={len(W_k)}")
+                elif len(W_k) > 0 and Gs in [entry[2] for entry in W_k]:
+                    # Candidate was admitted even without new coverage
+                    n_admitted += 1
+                    if self.debug:
+                        self._log(f"[HeuChaseMUTAG]   admitted with SAME coverage (diverse structure); heap={len(W_k)}")
+
+        if len(W_k) == 0:
+            # Fallback: admit H itself
+            covered = self._update_window(W_k, H, covered)
+
+        if self.debug:
+            self._log(f"[HeuChaseMUTAG] stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ|={len(covered)}")
+
+        S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
+        Sigma_star = covered
+
+        # Annotate witnesses
+        annotated = []
+        for Gs in S_k:
+            grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
+            try:
+                names = list(grounded_here)
+                rep_val = float(getattr(Gs, '_rep_sum', 0.0))
+                for attr in ('grounded_names', 'grounded', 'grounded_constraints', 'covered_constraints'):
+                    setattr(Gs, attr, names)
+                for attr in ('rep_sum', '_rep_sum'):
+                    setattr(Gs, attr, rep_val)
+            except Exception:
+                pass
+            annotated.append(Gs)
+        
         return Sigma_star, annotated

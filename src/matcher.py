@@ -28,11 +28,17 @@ def _data_to_nx(Gs: Any) -> nx.Graph:
     G = nx.Graph()
 
     # 处理节点与标签
-    # First, check if we have explicit node_labels attribute (for datasets without discrete labels)
-    if hasattr(Gs, 'node_labels') and isinstance(Gs.node_labels, torch.Tensor):
+    # Priority 1: Use y_type (KMeans cluster labels) if available
+    if hasattr(Gs, 'y_type') and isinstance(Gs.y_type, torch.Tensor):
+        labels = Gs.y_type.tolist()
+        for i, lab in enumerate(labels):
+            G.add_node(int(i), label=int(lab))
+    # Priority 2: Check if we have explicit node_labels attribute
+    elif hasattr(Gs, 'node_labels') and isinstance(Gs.node_labels, torch.Tensor):
         labels = Gs.node_labels.tolist()
         for i, lab in enumerate(labels):
             G.add_node(int(i), label=int(lab))
+    # Priority 3: Use x features
     elif hasattr(Gs, 'x') and isinstance(Gs.x, torch.Tensor):
         x = Gs.x
         # For datasets with discrete labels (one-hot), use argmax

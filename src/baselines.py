@@ -116,6 +116,91 @@ def run_gnn_explainer_graph(
     }
 
 
+# -----------------------------
+# GNNExplainer baseline (node)
+# -----------------------------
+def run_gnn_explainer_node(
+    model: torch.nn.Module,
+    data: Data,
+    target_node: int,
+    *,
+    epochs: int = 100,
+    lr: float = 0.01,
+    feat_mask_type: str = "feature",
+    allow_edge_mask: bool = True,
+    device: Optional[torch.device] = None,
+) -> Dict[str, Any]:
+    """
+    Run GNNExplainer for node classification tasks.
+    Similar to run_gnn_explainer_graph but for single node explanation.
+    """
+    dev = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+    model = model.to(dev).eval()
+    H = _move_data_to_device(data, dev)
+    
+    # Map feat_mask_type to MaskType
+    if feat_mask_type == "feature":
+        node_mask_type = MaskType.common_attributes
+    elif feat_mask_type == "individual_feature":
+        node_mask_type = MaskType.attributes
+    elif feat_mask_type == "scalar":
+        node_mask_type = MaskType.object
+    else:
+        raise ValueError(f"Invalid feat_mask_type: {feat_mask_type}")
+    
+    edge_mask_type = MaskType.object if allow_edge_mask else None
+    
+    # Wrapper for node classification model
+    class NodeModelWrapper(torch.nn.Module):
+        def __init__(self, base_model):
+            super().__init__()
+            self.model = base_model
+        
+        def forward(self, x, edge_index, **kwargs):
+            return self.model(x, edge_index)
+    
+    wrapped_model = NodeModelWrapper(model)
+    algorithm = GNNExplainer(epochs=epochs, lr=lr)
+    
+    explainer = Explainer(
+        model=wrapped_model,
+        algorithm=algorithm,
+        explanation_type='model',
+        node_mask_type=node_mask_type,
+        edge_mask_type=edge_mask_type,
+        model_config=ModelConfig(
+            mode=ModelMode.multiclass_classification,
+            task_level=ModelTaskLevel.node,  # Node-level task
+            return_type='raw',
+        ),
+    )
+    
+    # Run explanation for target node
+    explanation = explainer(
+        x=H.x,
+        edge_index=H.edge_index,
+        index=target_node,  # Explain this specific node
+    )
+    
+    # Extract masks
+    node_mask = explanation.get('node_mask') if hasattr(explanation, 'get') else getattr(explanation, 'node_mask', None)
+    edge_mask = explanation.get('edge_mask') if hasattr(explanation, 'get') else getattr(explanation, 'edge_mask', None)
+    
+    # Get prediction
+    with torch.no_grad():
+        out = model(H.x, H.edge_index)
+        prob = torch.softmax(out[target_node], dim=-1)
+        pred = int(prob.argmax().item())
+    
+    return {
+        "edge_mask": None if edge_mask is None else edge_mask.detach().cpu(),
+        "node_feat_mask": None if node_mask is None else node_mask.detach().cpu(),
+        "pred": pred,
+        "prob": prob.detach().cpu(),
+        "target_node": target_node,
+    }
+
+
 # ---------------------------
 # PGExplainer baseline (graph) — NEW API
 # ---------------------------
@@ -299,7 +384,175 @@ class PGExplainerBaseline:
         }
 
 
+# -----------------------------
+# PGExplainer baseline (node)
+# -----------------------------
+# Global cache for trained PGExplainer instances
+_pg_explainer_cache = {}
+
+class PGExplainerNodeCache:
+    """Cache for trained PGExplainer to avoid retraining for each node."""
+    
+    def __init__(self, model, full_data, device, epochs=30, lr=0.003):
+        self.model = model.to(device).eval()
+        self.full_data = _move_data_to_device(full_data, device)
+        self.device = device
+        self.explainer = None
+        self.wrapped_model = None
+        self._train(epochs, lr)
+    
+    def _train(self, epochs, lr):
+        """Train PGExplainer once on the full graph."""
+        # Wrapper for node classification model
+        class NodeModelWrapper(torch.nn.Module):
+            def __init__(self, base_model):
+                super().__init__()
+                self.model = base_model
+            
+            def forward(self, x, edge_index, **kwargs):
+                return self.model(x, edge_index)
+        
+        self.wrapped_model = NodeModelWrapper(self.model)
+        algorithm = PGExplainer(epochs=epochs, lr=lr)
+        
+        self.explainer = Explainer(
+            model=self.wrapped_model,
+            algorithm=algorithm,
+            explanation_type='phenomenon',
+            node_mask_type=None,
+            edge_mask_type=MaskType.object,
+            model_config=ModelConfig(
+                mode=ModelMode.multiclass_classification,
+                task_level=ModelTaskLevel.node,
+                return_type='raw',
+            ),
+        )
+        
+        # Train on multiple nodes from the full graph
+        num_train_nodes = min(100, self.full_data.x.size(0) // 2)
+        train_indices = torch.randperm(self.full_data.x.size(0))[:num_train_nodes]
+        
+        print(f"[PGExplainer] Training once on {self.full_data.x.size(0)} nodes, {self.full_data.edge_index.size(1)} edges")
+        print(f"[PGExplainer] Training with {num_train_nodes} sample nodes")
+        
+        for epoch in range(1, epochs + 1):
+            for idx in train_indices:
+                idx_int = int(idx.item())
+                loss = algorithm.train(
+                    epoch,
+                    model=self.wrapped_model,
+                    x=self.full_data.x,
+                    edge_index=self.full_data.edge_index,
+                    index=idx_int,
+                    target=self.full_data.y,
+                )
+        
+        print(f"[PGExplainer] Training completed after {epochs} epochs")
+    
+    def explain(self, subgraph_data, target_node):
+        """Explain a specific node using the trained explainer."""
+        H = _move_data_to_device(subgraph_data, self.device)
+        
+        # Get target label
+        with torch.no_grad():
+            out = self.model(H.x, H.edge_index)
+            target_label = out[target_node].argmax()
+        
+        # Generate explanation
+        explanation = self.explainer(
+            x=H.x,
+            edge_index=H.edge_index,
+            index=target_node,
+            target=target_label,
+        )
+        
+        return explanation, out, target_label
+
+
+def run_pgexplainer_node(
+    model: torch.nn.Module,
+    data: Data,
+    target_node: int,
+    *,
+    epochs: int = 30,
+    lr: float = 0.003,
+    feat_mask_type: str = "feature",
+    allow_edge_mask: bool = True,
+    device: Optional[torch.device] = None,
+    full_data: Optional[Data] = None,  # Full graph for training
+    use_cache: bool = True,  # Whether to use cached trained explainer
+) -> Dict[str, Any]:
+    """
+    Run PGExplainer for node classification tasks.
+    Uses a cached trained explainer to avoid retraining for each node.
+    
+    Args:
+        model: GNN model
+        data: Subgraph data around target node
+        target_node: Node index in the subgraph (after relabeling)
+        full_data: Full graph data for training (if None, uses data)
+        epochs: Training epochs (only used if training new explainer)
+        lr: Learning rate
+        device: Device to use
+        use_cache: If True, reuse trained explainer across multiple nodes
+        
+    Returns:
+        Dictionary with edge_mask, pred, prob, target_node
+    """
+    dev = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+    
+    # Determine which data to use for training
+    training_data = full_data if full_data is not None else data
+    if not hasattr(training_data, 'num_nodes') or training_data.num_nodes is None:
+        training_data.num_nodes = training_data.x.size(0)
+    
+    # Create cache key based on model and data
+    cache_key = id(model)
+    
+    # Get or create cached explainer
+    if use_cache and cache_key in _pg_explainer_cache:
+        print(f"[PGExplainer] Using cached trained explainer for node {target_node}")
+        pg_cache = _pg_explainer_cache[cache_key]
+    else:
+        if use_cache:
+            print(f"[PGExplainer] Training new explainer (will be cached)")
+        else:
+            print(f"[PGExplainer] Training new explainer (cache disabled)")
+        
+        pg_cache = PGExplainerNodeCache(
+            model=model,
+            full_data=training_data,
+            device=dev,
+            epochs=epochs,
+            lr=lr
+        )
+        
+        if use_cache:
+            _pg_explainer_cache[cache_key] = pg_cache
+    
+    # Use the trained explainer to explain this specific node
+    explanation, out, target_label = pg_cache.explain(data, target_node)
+    
+    # Extract masks
+    node_mask = explanation.get('node_mask') if hasattr(explanation, 'get') else getattr(explanation, 'node_mask', None)
+    edge_mask = explanation.get('edge_mask') if hasattr(explanation, 'get') else getattr(explanation, 'edge_mask', None)
+    
+    # Get prediction (already computed in explain)
+    prob = torch.softmax(out[target_node], dim=-1)
+    pred = int(prob.argmax().item())
+    
+    return {
+        "edge_mask": None if edge_mask is None else edge_mask.detach().cpu(),
+        "node_feat_mask": None if node_mask is None else node_mask.detach().cpu(),
+        "pred": pred,
+        "prob": prob.detach().cpu(),
+        "target_node": target_node,
+    }
+
+
 __all__ = [
     "run_gnn_explainer_graph",
+    "run_gnn_explainer_node",
+    "run_pgexplainer_node",
     "PGExplainerBaseline",
 ]

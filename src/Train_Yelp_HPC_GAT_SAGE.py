@@ -324,9 +324,10 @@ def main():
     hidden_dim = config['hidden_dim']
     
     # Models to train
+    # Use gat_yelp and sage_yelp naming to match config.yaml and Run_Experiment.py expectations
     models_to_train = [
-        ('gat', 'GAT 3-layer', GAT, {'heads': 2, 'dropout': 0.6}),
-        ('sage', 'GraphSAGE 3-layer', GraphSAGE, {'dropout': 0.5}),
+        ('gat_yelp', 'GAT 3-layer', GAT, {'heads': 2, 'dropout': 0.6}),
+        ('sage_yelp', 'GraphSAGE 3-layer', GraphSAGE, {'dropout': 0.5}),
     ]
     
     results = []

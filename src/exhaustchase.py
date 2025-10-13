@@ -73,18 +73,37 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
     model.eval()
     with torch.no_grad():
         # --- Factual: prediction unchanged on Gs vs y_ref ---
-        out = model(Gs)
+        # Determine if model expects (x, edge_index) or Data object
+        model_class_name = model.__class__.__name__
+        is_node_model = (hasattr(Gs, 'task') and Gs.task == 'node') or \
+                       any(name in model_class_name for name in ['GCN_', 'GAT_Yelp', 'SAGE_Yelp', 'GraphSAGE']) or \
+                       (not any(word in model_class_name for word in ['Classifier', 'Graph']))
+        
+        if is_node_model:
+            # Node classification: model expects (x, edge_index)
+            out = model(Gs.x, Gs.edge_index)
+        else:
+            # Graph classification: model expects Data object
+            out = model(Gs)
+        
         factual_ok = False
         if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
-            y_hat = out.argmax(dim=-1)
             y_ref = getattr(Gs, 'y_ref', None)
             if y_ref is None:
                 factual_ok = True
             else:
-                # Use the relabeled target node ID in the subgraph
                 target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id])
+                # Check if multi-label (output_dim > 1 and not using softmax)
+                if out.dim() > 1 and out.size(-1) > 1:
+                    # Multi-label: use sigmoid
+                    y_hat = (torch.sigmoid(out) > 0.5).float()
+                    factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).all()
+                else:
+                    # Multi-class: use argmax
+                    y_hat = out.argmax(dim=-1)
+                    factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id])
         else:
+            # Graph classification
             y_hat = out.argmax(dim=-1)
             y_ref = getattr(Gs, 'y_ref', None)
             if y_ref is None:
@@ -118,17 +137,32 @@ def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
             if hasattr(H_full, 'E_base'):
                 H_minus.E_base = H_full.E_base
             # Run prediction on H_minus
-            out_minus = model(H_minus)
-            if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
-                y_hat_minus = out_minus.argmax(dim=-1)
-                y_hat_gs = out.argmax(dim=-1)
-                # Counterfactual: prediction flips for v_t (use relabeled ID)
-                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id])
+            # Use same logic as above to determine model type
+            if is_node_model:
+                # Node classification: model expects (x, edge_index)
+                out_minus = model(H_minus.x, H_minus.edge_index)
             else:
+                # Graph classification: model expects Data object
+                out_minus = model(H_minus)
+            
+            if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
+                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
+                # Check if multi-label
+                if out.dim() > 1 and out.size(-1) > 1:
+                    # Multi-label: use sigmoid
+                    y_hat_minus = (torch.sigmoid(out_minus) > 0.5).float()
+                    y_hat_gs = (torch.sigmoid(out) > 0.5).float()
+                    # Counterfactual: ANY label flips
+                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id]).any()
+                else:
+                    # Multi-class: use argmax
+                    y_hat_minus = out_minus.argmax(dim=-1)
+                    y_hat_gs = out.argmax(dim=-1)
+                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id])
+            else:
+                # Graph classification
                 y_hat_minus = out_minus.argmax(dim=-1)
                 y_hat_gs = out.argmax(dim=-1)
-                # Counterfactual: prediction flips for graph
                 counterfactual_ok = (y_hat_gs[0] != y_hat_minus[0])
 
         # Accept if either factual OR counterfactual passes
@@ -169,6 +203,8 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     """
     ei = H.edge_index
     kept_ei = ei[:, edge_mask]
+    H_num_nodes = int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else H.x.size(0))
+    
     if kept_ei.numel() > 0:
         nodes = torch.unique(kept_ei.flatten()).to(torch.long)
     else:
@@ -177,12 +213,27 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
         if root_idx is None:
             nodes = torch.tensor([0], dtype=torch.long, device=ei.device)
         else:
-            nodes = torch.tensor([int(root_idx)], dtype=torch.long, device=ei.device)
+            # Ensure root_idx is within valid range
+            root_idx = int(root_idx)
+            if root_idx >= H_num_nodes:
+                # Root is out of bounds, use 0 instead
+                nodes = torch.tensor([0], dtype=torch.long, device=ei.device)
+            else:
+                nodes = torch.tensor([root_idx], dtype=torch.long, device=ei.device)
 
     # Build a compact mapping: original node id -> [0..num_nodes-1] in the candidate
-    mapping = -torch.ones(int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else H.x.size(0)),
-                         dtype=torch.long, device=ei.device)
-    mapping[nodes] = torch.arange(nodes.numel(), device=ei.device, dtype=torch.long)
+    # Ensure mapping size accommodates all node indices in 'nodes'
+    max_node_id = max(int(nodes.max().item()), H_num_nodes - 1)
+    mapping = -torch.ones(max_node_id + 1, dtype=torch.long, device=ei.device)
+    
+    # Filter nodes to be within valid range
+    valid_nodes = nodes[nodes < H_num_nodes]
+    if valid_nodes.numel() == 0:
+        # No valid nodes, use node 0
+        valid_nodes = torch.tensor([0], dtype=torch.long, device=ei.device)
+    
+    mapping[valid_nodes] = torch.arange(valid_nodes.numel(), device=ei.device, dtype=torch.long)
+    nodes = valid_nodes
 
     # Keep only the **selected** edges and relabel their endpoints according to the mapping
     kept_ei = ei[:, edge_mask]
@@ -205,10 +256,58 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
         data.batch = torch.zeros(data.num_nodes, dtype=torch.long, device=nodes.device)
     if hasattr(H, 'task'):
         data.task = H.task
-    if hasattr(H, 'y_ref'):
-        data.y_ref = H.y_ref
+    
+    # Extract y_ref, y, and y_type based on task type
+    # For NODE classification: index by selected nodes (like x)
+    # For GRAPH classification: keep as-is (single value per graph)
+    # Detect node task: H.root exists and is valid, OR H.task == 'node', OR y_ref has same length as num_nodes
+    root_val = getattr(H, 'root', None)
+    task_type = getattr(H, 'task', None)
+    y_ref = getattr(H, 'y_ref', None)
+    is_node_task = (root_val is not None and root_val >= 0) or \
+                   (task_type == 'node') or \
+                   (y_ref is not None and y_ref.numel() > 1 and y_ref.size(0) == H.num_nodes)
+    
+    if hasattr(H, 'y_ref') and H.y_ref is not None:
+        if is_node_task:
+            data.y_ref = H.y_ref[nodes]  # Node classification: index by nodes
+        else:
+            data.y_ref = H.y_ref  # Graph classification: keep as-is
+    
+    if hasattr(H, 'y') and H.y is not None:
+        if is_node_task:
+            data.y = H.y[nodes]  # Node classification: index by nodes
+        else:
+            data.y = H.y  # Graph classification: keep as-is
+    
+    if hasattr(H, 'y_type') and H.y_type is not None:
+        if is_node_task:
+            data.y_type = H.y_type[nodes]  # Node classification: index by nodes
+        else:
+            data.y_type = H.y_type  # Graph classification: keep as-is
+    
     data.root = getattr(H, 'root', None)
     data.E_base = getattr(H, 'E_base', None)
+    
+    # FIX: recompute _target_node_subgraph_id in candidate subgraph
+    root_val = getattr(data, 'root', None)
+    if root_val is not None and root_val >= 0:
+        # Ensure root_val is within mapping bounds
+        root_idx = int(root_val)
+        if root_idx < len(mapping) and mapping[root_idx] >= 0:
+            data._target_node_subgraph_id = int(mapping[root_idx].item())
+        else:
+            # Root not in this subgraph, use 0
+            data._target_node_subgraph_id = 0
+    elif hasattr(H, '_target_node_subgraph_id'):
+        # If H already has _target_node_subgraph_id (from L-hop extraction), remap it
+        old_id = H._target_node_subgraph_id
+        if old_id < len(mapping) and mapping[old_id] >= 0:
+            data._target_node_subgraph_id = int(mapping[old_id].item())
+        else:
+            data._target_node_subgraph_id = 0
+    else:
+        data._target_node_subgraph_id = 0
     # Attach references for counterfactual verification:
     # _H_full: the full (masked) graph; _edge_idx_in_full: indices of this candidate's edges in H
     data._H_full = H
@@ -506,7 +605,14 @@ class ExhaustChase:
             - S_k: List of witness candidates
             - enforce_time: Time spent on exhaustive enforcement
         """
-        H = self._prepare_subgraph(data, v_t)
+        # Check if data is already a prepared subgraph (has target_node_subgraph_id)
+        if hasattr(data, 'target_node_subgraph_id'):
+            # Data is already a prepared subgraph, use it directly
+            H = data.clone()
+        else:
+            # Need to prepare subgraph
+            H = self._prepare_subgraph(data, v_t)
+        
         H.task = 'node'
         H.root = int(v_t)
         self._H_clean = getattr(data, '_clean', data)

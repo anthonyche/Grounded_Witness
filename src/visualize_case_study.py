@@ -14,6 +14,9 @@ Usage:
 from __future__ import annotations
 from itertools import count
 
+import matplotlib.pyplot as plt
+import networkx as nx
+
 import argparse
 import json
 import os
@@ -26,6 +29,7 @@ from torch_geometric.data import Data
 from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_constraint_coverage
 from model import get_model
 from apxchase import ApxChase
+from apxchase_mutag import ApxChase as ApxChaseMUTAG  # Import MUTAG-specific version
 from exhaustchase import ExhaustChase
 from constraints import get_constraints
 
@@ -47,6 +51,198 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 
 _HEAP_SEQ = count()
+
+
+# ----------------------- Visualization Utilities ----------------------- #
+
+def _edge_index_to_undirected_edge_set(edge_index: torch.Tensor) -> set:
+    """Convert a (2, E) edge_index tensor into a set of undirected edges (u, v) with u<=v."""
+    if edge_index is None:
+        return set()
+    ei = edge_index.detach().cpu().numpy()
+    E = ei.shape[1]
+    s = set()
+    for j in range(E):
+        u = int(ei[0, j])
+        v = int(ei[1, j])
+        if u == v:
+            # keep self-loops as (u, u)
+            s.add((u, v))
+        else:
+            a, b = (u, v) if u <= v else (v, u)
+            s.add((a, b))
+    return s
+
+def _build_nx_from_pyg(masked_graph: Data) -> nx.Graph:
+    """Build a NetworkX Graph from a PyG Data graph (treated as undirected)."""
+    G = nx.Graph()
+    num_nodes = int(masked_graph.num_nodes if masked_graph.num_nodes is not None else masked_graph.x.size(0))
+    G.add_nodes_from(range(num_nodes))
+    base_edges = _edge_index_to_undirected_edge_set(masked_graph.edge_index)
+    G.add_edges_from(base_edges)
+    return G
+
+def _draw_overlay_case(masked_graph: Data,
+                       witness_graph: Data,
+                       pos: dict,
+                       out_path: str,
+                       title: str = "",
+                       clean_graph: Data = None) -> None:
+    """
+    Draw the complete original graph structure with colored nodes by atom type.
+    Masked edges are shown as dashed light blue lines, witness edges in bold red.
+    `pos` is a precomputed layout to keep node positions consistent.
+    """
+    # Use clean graph as base if provided, otherwise use masked graph
+    if clean_graph is not None:
+        G = _build_nx_from_pyg(clean_graph)
+        # Calculate which edges were masked
+        clean_edges = _edge_index_to_undirected_edge_set(clean_graph.edge_index)
+        masked_edges_set = _edge_index_to_undirected_edge_set(masked_graph.edge_index)
+        masked_edges = clean_edges - masked_edges_set
+        remaining_edges = masked_edges_set
+    else:
+        G = _build_nx_from_pyg(masked_graph)
+        masked_edges = set()
+        remaining_edges = set(G.edges())
+    
+    # MUTAG node label mapping: 'C': 0, 'N': 1, 'O': 2, 'F': 3, 'I': 4, 'Cl': 5, 'Br': 6
+    # 使用更柔和、饱和度更低的颜色
+    atom_names = ['C', 'N', 'O', 'F', 'I', 'Cl', 'Br']
+    atom_colors = ['#F5DEB3', '#87CEEB', '#FFB6C1', '#98FB98', '#DDA0DD', '#90EE90', '#6A0DAD']
+    # C: 淡黄色(Wheat), N: 天蓝色(SkyBlue), O: 浅粉色(LightPink), 
+    # F: 淡绿色(PaleGreen), I: 淡紫色(Plum), Cl: 浅绿色(LightGreen), Br: 深紫色(DarkPurple)
+    
+    # Extract node labels from the graph's feature matrix
+    # MUTAG uses one-hot encoding for atom types
+    node_labels = []
+    if hasattr(masked_graph, 'x') and masked_graph.x is not None:
+        x_np = masked_graph.x.detach().cpu().numpy()
+        # Assuming first 7 features are one-hot encoded atom types
+        for i in range(len(x_np)):
+            # Find which of the first 7 features is 1
+            atom_idx = np.argmax(x_np[i, :7])
+            node_labels.append(atom_idx)
+    else:
+        # Fallback: all nodes are carbon
+        node_labels = [0] * G.number_of_nodes()
+    
+    # Assign colors based on atom type
+    node_colors = [atom_colors[label] for label in node_labels]
+    
+    # Increase width to accommodate legend on the right without squishing the molecule
+    plt.figure(figsize=(11, 6))
+    
+    # Draw nodes with atom-specific colors
+    nx.draw_networkx_nodes(G, pos, node_size=300, node_color=node_colors, 
+                          linewidths=1.5, edgecolors='black', alpha=0.9)
+    
+    # Draw all edges from the base graph first (solid grey)
+    # These include both remaining and masked edges
+    nx.draw_networkx_edges(G, pos, width=1.0, edge_color="#BBBBBB", alpha=0.7)
+    
+    # Overlay masked edges with dashed light blue style (thicker and more visible)
+    if len(masked_edges) > 0:
+        nx.draw_networkx_edges(G, pos, edgelist=list(masked_edges),
+                              width=2.5, edge_color="#4A90E2", alpha=0.8,
+                              style='dashed')
+
+    # Overlay witness edges in bold red (on top of everything)
+    # IMPORTANT: Witness uses relabeled node IDs (0-indexed). 
+    # We must map them back to original graph IDs using _nodes_in_full
+    W_edges_relabeled = _edge_index_to_undirected_edge_set(witness_graph.edge_index)
+    
+    # Map witness edges back to original node IDs if mapping exists
+    if hasattr(witness_graph, '_nodes_in_full') and witness_graph._nodes_in_full is not None:
+        nodes_in_full = witness_graph._nodes_in_full.cpu().numpy()
+        W_edges_original = set()
+        for u_rel, v_rel in W_edges_relabeled:
+            u_orig = int(nodes_in_full[u_rel])
+            v_orig = int(nodes_in_full[v_rel])
+            # Ensure canonical form (u <= v)
+            if u_orig <= v_orig:
+                W_edges_original.add((u_orig, v_orig))
+            else:
+                W_edges_original.add((v_orig, u_orig))
+        
+        # Debug: Print mapping info (can be removed later)
+        if False:  # Set to True to enable debug output
+            print(f"[VIZ DEBUG] Witness has {len(W_edges_relabeled)} edges (relabeled IDs)")
+            print(f"[VIZ DEBUG] Mapped to {len(W_edges_original)} edges (original IDs)")
+            print(f"[VIZ DEBUG] Node mapping: {nodes_in_full}")
+    else:
+        # Fallback: assume witness IDs match original IDs (unlikely for subgraphs)
+        W_edges_original = W_edges_relabeled
+        if False:  # Debug
+            print(f"[VIZ WARN] No _nodes_in_full mapping found, using relabeled IDs as-is")
+    
+    # Show witness edges that exist in the original graph structure
+    base_edges = set(G.edges())
+    overlay_edges = list(W_edges_original & base_edges)
+    
+    # Debug: Check edge matching
+    if False:  # Set to True to enable debug output
+        print(f"[VIZ DEBUG] Base graph has {len(base_edges)} edges")
+        print(f"[VIZ DEBUG] Witness (original IDs) has {len(W_edges_original)} edges")
+        print(f"[VIZ DEBUG] Overlay (intersection) has {len(overlay_edges)} edges")
+        if len(overlay_edges) < len(W_edges_original):
+            missing = W_edges_original - base_edges
+            print(f"[VIZ WARN] {len(missing)} witness edges not found in base graph: {list(missing)[:5]}...")
+        
+        # Check connectivity of witness subgraph
+        if len(overlay_edges) > 0:
+            witness_nx = nx.Graph()
+            witness_nx.add_edges_from(overlay_edges)
+            num_components = nx.number_connected_components(witness_nx)
+            largest_cc = max(nx.connected_components(witness_nx), key=len) if num_components > 0 else set()
+            print(f"[VIZ DEBUG] Witness connectivity: {num_components} component(s), largest={len(largest_cc)} nodes, total_edges={len(overlay_edges)}")
+            if num_components > 1:
+                print(f"[VIZ WARN] Witness has {num_components} DISCONNECTED components!")
+                for idx, comp in enumerate(nx.connected_components(witness_nx), 1):
+                    print(f"  Component {idx}: {len(comp)} nodes - {sorted(list(comp))}")
+
+    if len(overlay_edges) > 0:
+        nx.draw_networkx_edges(G,
+                               pos,
+                               edgelist=overlay_edges,
+                               width=3.5,
+                               edge_color="red",
+                               alpha=0.95)
+
+    # Add legend for atom types and edge types
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    
+    # Atom type legend
+    legend_elements = [Patch(facecolor=atom_colors[i], edgecolor='black', 
+                             label=atom_names[i]) for i in range(len(atom_names))]
+    
+    # Add separator
+    legend_elements.append(Line2D([0], [0], color='none', label=''))
+    
+    # Edge type legend
+    legend_elements.append(Line2D([0], [0], color='#BBBBBB', linewidth=1.0, 
+                                  label='Original edges'))
+    if len(masked_edges) > 0:
+        legend_elements.append(Line2D([0], [0], color='#4A90E2', linewidth=2.5, 
+                                      linestyle='dashed', alpha=0.8,
+                                      label='Masked out'))
+    legend_elements.append(Line2D([0], [0], color='red', linewidth=3.5, 
+                                  label='Witness'))
+    
+    # Place legend outside the plot area on the right side
+    # Much larger font sizes for better readability in small figures
+    plt.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1.0),
+              framealpha=0.95, fontsize=18, title='Legend', title_fontsize=20, ncol=1, 
+              borderaxespad=0, edgecolor='gray', fancybox=True, 
+              handlelength=2.5, handleheight=1.5)
+
+    # Title removed as requested - figure will have no title
+    plt.axis("off")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    plt.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -192,6 +388,45 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
     t1 = time.time()
     elapsed = t1 - t0
 
+    # --- Case Study Visualization: base masked graph + overlays for all explanations in W_k --- #
+    try:
+        save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
+        os.makedirs(save_root, exist_ok=True)
+
+        # Compute layout on the COMPLETE original graph for better molecular structure
+        clean_graph_for_viz = getattr(masked_graph, '_clean', base_graph)
+        nx_base = _build_nx_from_pyg(clean_graph_for_viz)
+        
+        # Debug: Check masked_graph connectivity
+        num_comps_base = nx.number_connected_components(nx_base)
+        if num_comps_base > 1:
+            print(f"[WARN] Masked graph has {num_comps_base} disconnected components!")
+            for idx, comp in enumerate(nx.connected_components(nx_base), 1):
+                print(f"  Masked Component {idx}: {len(comp)} nodes")
+        
+        # Use Kamada-Kawai layout for better molecular structure visualization
+        # Falls back to spring layout if KK fails
+        try:
+            pos = nx.kamada_kawai_layout(nx_base)
+        except:
+            # Fallback to spring layout with tighter spacing
+            pos = nx.spring_layout(nx_base, seed=42, k=0.5, iterations=50)
+
+        # Draw **all** witnesses in the window W_k
+        total_w = len(witnesses)
+        for i, w in enumerate(witnesses, start=1):
+            out_path = os.path.join(save_root, f"case_graph_{dataset_idx}_expl_{i}.png")
+            _draw_overlay_case(
+                masked_graph,
+                w,
+                pos,
+                out_path,
+                title=None,
+                clean_graph=clean_graph_for_viz
+            )
+    except Exception as viz_e:
+        print(f"[WARN] Visualization failed: {viz_e}")
+
     coverage_names: List[str] = []
     for constraint in Sigma_star:
         if isinstance(constraint, dict) and "name" in constraint:
@@ -246,6 +481,20 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
             "conciseness": float(conciseness),
         }
         witness_summaries.append(summary)
+
+    # Save the overlay edge lists for **all** witnesses (for reproducibility)
+    try:
+        all_edges_payload = []
+        for i, w in enumerate(witnesses, start=1):
+            edges_i = _edge_index_to_undirected_edge_set(w.edge_index)
+            all_edges_payload.append({
+                "index": i,
+                "edges": sorted([list(e) for e in edges_i])
+            })
+        with open(os.path.join(save_root, f"case_graph_{dataset_idx}_expl_edges_all.json"), "w", encoding="utf-8") as fp:
+            json.dump(all_edges_payload, fp, indent=2)
+    except Exception as e_save:
+        print(f"[WARN] Failed to save overlay edges: {e_save}")
 
     # 计算平均 Fidelity- 和 Conciseness
     avg_fidelity = float(np.mean(fidelity_scores)) if len(fidelity_scores) > 0 else 0.0
@@ -643,7 +892,9 @@ def main() -> None:
     _debug_list_constraints(constraints)
 
     model = _load_trained_model(config, device)
-    chaser = ApxChase(
+    
+    # Use MUTAG-specific ApxChase with BFS-based multi-center strategy for connected explanations
+    chaser = ApxChaseMUTAG(
         model=model,
         Sigma=constraints,
         L=config.get("L", 2),
@@ -652,7 +903,8 @@ def main() -> None:
         alpha=config.get("alpha", 1.0),
         beta=config.get("beta", 1.0),
         gamma=config.get("gamma", 1.0),
-        debug=False,
+        debug=True,  # Enable debug to diagnose connectivity issues
+        num_centers=10,  # Not used anymore - we process all nodes as centers
     )
 
     exp_name = str(config.get("exp_name", "apxchase_mutag")).lower()
@@ -731,8 +983,8 @@ def main() -> None:
             coverage_scores.append(cov)
 
     elif exp_name.startswith("heuchase"):
-        from heuchase import HeuChase
-        chaser = HeuChase(
+        from heuchase_mutag import HeuChaseMUTAG
+        chaser = HeuChaseMUTAG(
             model=model,
             Sigma=constraints,
             L=config.get("L", 2),
@@ -742,7 +994,8 @@ def main() -> None:
             beta=config.get("beta", 1.0),
             gamma=config.get("gamma", 1.0),
             m=config.get("heuchase_m", 6),
-            debug=False,
+            noise_std=config.get("heuchase_noise_std", 0.1),  # Configurable noise level
+            debug=True,  # Enable debug for case study
         )
         for pos in test_positions:
             elapsed, count, avg_fid, avg_conc, cov = _run_one_graph_apxchase(pos, dataset_resource, dataset, constraints, config, device, chaser)

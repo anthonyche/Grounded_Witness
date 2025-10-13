@@ -143,6 +143,29 @@ def dataset_func(config):
         
         print(f"[dataset_func] Yelp dimensions: input_dim={config['input_dim']}, output_dim={config['output_dim']}, num_nodes={config['num_nodes']}, multi_label={config.get('multi_label', False)}")
         
+        # Add KMeans clustering to create pseudo node types for constraint matching
+        # Cache the clustering results to avoid re-computation
+        cluster_cache_path = os.path.join(data_root, 'yelp_kmeans_clusters.pt')
+        n_clusters = config.get('n_node_types', 16)  # Default 16 types
+        
+        if os.path.exists(cluster_cache_path):
+            print(f"[dataset_func] Loading cached KMeans clusters from {cluster_cache_path}...")
+            cluster_labels = torch.load(cluster_cache_path)
+            data.y_type = cluster_labels
+            print(f"[dataset_func] ✅ Loaded {n_clusters} cached node types")
+        else:
+            print(f"[dataset_func] Running KMeans clustering on node features (first time)...")
+            from sklearn.cluster import KMeans
+            emb = data.x.cpu().numpy()  # 300-dim features
+            kmeans = KMeans(n_clusters=n_clusters, random_state=random_seed, n_init=10)
+            cluster_labels = kmeans.fit_predict(emb)
+            data.y_type = torch.tensor(cluster_labels, dtype=torch.long)
+            # Save for future runs
+            torch.save(data.y_type, cluster_cache_path)
+            print(f"[dataset_func] ✅ Created and cached {n_clusters} node types")
+        
+        print(f"[dataset_func] Type distribution: {torch.bincount(data.y_type).tolist()}")
+        
         # Get target nodes for explanation
         target_nodes = config.get('target_nodes', None)
         if target_nodes is None:
@@ -183,8 +206,10 @@ def dataset_func(config):
     if data_size is None or num_class is None:
         raise ValueError("Planetoid datasets require 'data_size' and 'output_dim' in the config.")
 
-    num_train_per_class = (data_size - num_test)//num_class
-    data = Planetoid(root=data_dir, name=data_name, split='random', num_train_per_class=num_train_per_class, num_val=0, num_test=num_test)[0]
+    # Calculate train/val/test split: 60% train, 20% val, 20% test (standard for Planetoid)
+    num_val = int(data_size * 0.2)  # 20% for validation
+    num_train_per_class = (data_size - num_val - num_test) // num_class
+    data = Planetoid(root=data_dir, name=data_name, split='random', num_train_per_class=num_train_per_class, num_val=num_val, num_test=num_test)[0]
     return data
 
 
@@ -214,7 +239,7 @@ def load_precomputed(save_dir='precomputed/'):
     return precomputed_data
 
 
-def compute_fidelity_minus(model, original_graph, explanation_subgraph, device):
+def compute_fidelity_minus(model, original_graph, explanation_subgraph, device, is_node=False, target_node_id=None):
     """
     计算Fidelity- (Fidelity Minus) 指标
     
@@ -225,13 +250,16 @@ def compute_fidelity_minus(model, original_graph, explanation_subgraph, device):
     - M 是GNN模型
     - Pr 是对目标类别的预测概率
     
-    对于MUTAG图分类任务，我们使用原始图的predicted label作为目标类别
+    对于图分类任务：使用原始图的predicted label作为目标类别
+    对于节点分类任务：使用目标节点的predicted label作为目标类别
     
     Args:
         model: 训练好的GNN模型
         original_graph: 原始图 (torch_geometric.data.Data)
         explanation_subgraph: 解释子图/witness (torch_geometric.data.Data)
         device: torch.device
+        is_node: bool, 是否为节点分类任务 (default: False)
+        target_node_id: int, 目标节点在子图中的ID (仅用于节点分类)
     
     Returns:
         float: fidelity- 值，越大表示解释越重要（移除后预测概率下降越多）
@@ -241,31 +269,58 @@ def compute_fidelity_minus(model, original_graph, explanation_subgraph, device):
     with torch.no_grad():
         # 1. 获取原始图的预测
         original_graph = original_graph.to(device)
-        logits_original = model(original_graph)
-        probs_original = torch.softmax(logits_original, dim=-1)
         
-        # 对于图分类，predicted label
-        if probs_original.dim() > 1:
-            probs_original = probs_original.squeeze(0)
-        predicted_label = logits_original.argmax(dim=-1).item()
-        prob_original = probs_original[predicted_label].item()
+        if is_node:
+            # 节点分类：模型接受 (x, edge_index)
+            logits_original = model(original_graph.x, original_graph.edge_index)
+            probs_original = torch.softmax(logits_original, dim=-1)
+            
+            # 获取目标节点的ID
+            if target_node_id is None:
+                target_node_id = getattr(original_graph, 'target_node_subgraph_id', 
+                                        getattr(original_graph, '_target_node_subgraph_id', 0))
+            
+            predicted_label = logits_original[target_node_id].argmax(dim=-1).item()
+            prob_original = probs_original[target_node_id, predicted_label].item()
+        else:
+            # 图分类：模型接受 Data 对象
+            logits_original = model(original_graph)
+            probs_original = torch.softmax(logits_original, dim=-1)
+            
+            # 对于图分类，predicted label
+            if probs_original.dim() > 1:
+                probs_original = probs_original.squeeze(0)
+            predicted_label = logits_original.argmax(dim=-1).item()
+            prob_original = probs_original[predicted_label].item()
         
         # 2. 获取解释子图的预测
         explanation_subgraph = explanation_subgraph.to(device)
-        # 确保子图有batch属性
-        if not hasattr(explanation_subgraph, 'batch') or explanation_subgraph.batch is None:
-            explanation_subgraph.batch = torch.zeros(
-                explanation_subgraph.num_nodes, 
-                dtype=torch.long, 
-                device=device
-            )
         
-        logits_subgraph = model(explanation_subgraph)
-        probs_subgraph = torch.softmax(logits_subgraph, dim=-1)
-        
-        if probs_subgraph.dim() > 1:
-            probs_subgraph = probs_subgraph.squeeze(0)
-        prob_subgraph = probs_subgraph[predicted_label].item()
+        if is_node:
+            # 节点分类
+            logits_subgraph = model(explanation_subgraph.x, explanation_subgraph.edge_index)
+            probs_subgraph = torch.softmax(logits_subgraph, dim=-1)
+            
+            # 获取目标节点在子图中的ID
+            target_id_in_subgraph = getattr(explanation_subgraph, 'target_node_subgraph_id',
+                                           getattr(explanation_subgraph, '_target_node_subgraph_id', 0))
+            prob_subgraph = probs_subgraph[target_id_in_subgraph, predicted_label].item()
+        else:
+            # 图分类
+            # 确保子图有batch属性
+            if not hasattr(explanation_subgraph, 'batch') or explanation_subgraph.batch is None:
+                explanation_subgraph.batch = torch.zeros(
+                    explanation_subgraph.num_nodes, 
+                    dtype=torch.long, 
+                    device=device
+                )
+            
+            logits_subgraph = model(explanation_subgraph)
+            probs_subgraph = torch.softmax(logits_subgraph, dim=-1)
+            
+            if probs_subgraph.dim() > 1:
+                probs_subgraph = probs_subgraph.squeeze(0)
+            prob_subgraph = probs_subgraph[predicted_label].item()
         
         # 3. 计算 Fidelity- = Pr(M(G)) - Pr(M(G_s))
         fidelity_minus = prob_original - prob_subgraph

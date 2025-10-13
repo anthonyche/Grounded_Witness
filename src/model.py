@@ -83,6 +83,89 @@ class GCN_4(torch.nn.Module):
         return F.log_softmax(x, dim=1)
 
 
+# ============================================================================
+# Yelp-specific Models (Multi-label Node Classification)
+# These models return raw logits (no log_softmax) for BCEWithLogitsLoss
+# ============================================================================
+
+class GCN_Yelp_1(torch.nn.Module):
+    """1-layer GCN for Yelp multi-label node classification"""
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.5):
+        super().__init__()
+        self.conv1 = GCNConv(input_dim, output_dim)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        return x  # Raw logits for BCEWithLogitsLoss
+
+class GCN_Yelp_2(torch.nn.Module):
+    """2-layer GCN for Yelp multi-label node classification"""
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.5):
+        super().__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, output_dim)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = F.relu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv2(x, edge_index)
+        return x  # Raw logits for BCEWithLogitsLoss
+
+class GCN_Yelp_3(torch.nn.Module):
+    """3-layer GCN for Yelp multi-label node classification"""
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.5):
+        super().__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        self.conv3 = GCNConv(hidden_dim, output_dim)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = F.relu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = F.relu(self.conv2(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv3(x, edge_index)
+        return x  # Raw logits for BCEWithLogitsLoss
+
+class GAT_Yelp(torch.nn.Module):
+    """Memory-optimized GAT for Yelp multi-label node classification"""
+    def __init__(self, input_dim, hidden_dim, output_dim, heads=2, dropout=0.6):
+        super().__init__()
+        # Reduced heads from 8 to 2 to save memory
+        self.conv1 = GATConv(input_dim, hidden_dim // heads, heads=heads, dropout=dropout)
+        self.conv2 = GATConv(hidden_dim, hidden_dim // heads, heads=heads, dropout=dropout)
+        self.conv3 = GATConv(hidden_dim, output_dim, heads=1, concat=False, dropout=dropout)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = F.elu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = F.elu(self.conv2(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv3(x, edge_index)
+        return x  # Raw logits for BCEWithLogitsLoss
+
+class SAGE_Yelp(torch.nn.Module):
+    """Memory-optimized GraphSAGE for Yelp multi-label node classification"""
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.5):
+        super().__init__()
+        self.conv1 = SAGEConv(input_dim, hidden_dim)
+        self.conv2 = SAGEConv(hidden_dim, hidden_dim)
+        self.conv3 = SAGEConv(hidden_dim, output_dim)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = F.relu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = F.relu(self.conv2(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv3(x, edge_index)
+        return x  # Raw logits for BCEWithLogitsLoss
+
 
 class GAT(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
@@ -91,7 +174,7 @@ class GAT(torch.nn.Module):
 
         self.conv1 = GATConv(input_dim, hidden_dim, heads=heads, dropout=0.6)
         self.conv2 = GATConv(hidden_dim * heads, hidden_dim, heads=heads, dropout=0.6)
-        self.conv3 = GATConv(hidden_dim * heads, output_dim, heads=1, concat=True, dropout=0.6)
+        self.conv3 = GATConv(hidden_dim * heads, output_dim, heads=1, concat=False, dropout=0.6)
 
     def forward(self, x, edge_index):
         
@@ -153,15 +236,17 @@ class GraphSAGE(torch.nn.Module):
         # First layer with ReLU activation
         x = self.conv1(x, edge_index)
         x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
 
         # Second layer with ReLU activation
         x = self.conv2(x, edge_index)
         x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
 
         # Third layer (output layer)
         x = self.conv3(x, edge_index)
 
-        return x
+        return F.log_softmax(x, dim=-1)  # For NLL loss (single-label classification)
 
 # three layer GCN graph classifier
 class GCNGraphClassifier_3(torch.nn.Module):
@@ -343,6 +428,28 @@ def get_model(config):
         return model
     elif model_name == 'gat_graph_3':
         model = GATGraphClassifier_3(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
+        return model
+    # Yelp-specific models (multi-label node classification)
+    elif model_name == 'gcn_yelp_1':
+        dropout = config.get('dropout', 0.5)
+        model = GCN_Yelp_1(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, dropout=dropout)
+        return model
+    elif model_name == 'gcn_yelp_2':
+        dropout = config.get('dropout', 0.5)
+        model = GCN_Yelp_2(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, dropout=dropout)
+        return model
+    elif model_name == 'gcn_yelp_3':
+        dropout = config.get('dropout', 0.5)
+        model = GCN_Yelp_3(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, dropout=dropout)
+        return model
+    elif model_name == 'gat_yelp':
+        heads = config.get('heads', 2)
+        dropout = config.get('dropout', 0.6)
+        model = GAT_Yelp(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, heads=heads, dropout=dropout)
+        return model
+    elif model_name == 'sage_yelp':
+        dropout = config.get('dropout', 0.5)
+        model = SAGE_Yelp(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, dropout=dropout)
         return model
     else:
         raise ValueError(f"Unknown model name: {model_name}")
