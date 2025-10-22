@@ -34,38 +34,8 @@ echo ""
 
 # Load modules (adjust based on your HPC environment)
 module purge
-module load python/3.10
-module load cuda/11.8
-module load cudnn/8.6
+module load Miniconda3
 
-# Activate virtual environment (create if needed)
-if [ ! -d "venv_ogbn" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv_ogbn
-    source venv_ogbn/bin/activate
-    
-    echo "Installing dependencies..."
-    pip install --upgrade pip
-    pip install torch==2.0.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-    pip install torch-geometric
-    pip install pyg-lib torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.0.1+cu118.html
-    pip install ogb
-    pip install pyyaml
-    pip install tqdm
-else
-    source venv_ogbn/bin/activate
-fi
-
-echo ""
-echo "Python environment:"
-which python
-python --version
-echo ""
-
-# Create necessary directories
-mkdir -p logs
-mkdir -p models
-mkdir -p datasets
 
 # Set environment variables
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
