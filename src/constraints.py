@@ -56,76 +56,76 @@ def validate_tgd(tgd: TGD) -> None:
 # ----------------------------------------------------------------------
 TGD_C6_CLOSURE_1 = {
   "name": "c6_closure",
-  "body": {   # 需要补全或验证的部分（修复目标）
-    "nodes": {
-      "A": {"in": [LABEL_ID['C']]},
-      "D": {"in": [LABEL_ID['C']]},
-      "E": {"in": [LABEL_ID['C']]},
-      "F": {"in": [LABEL_ID['C']]}
-    },
-    "edges": [("D","E"),("E","F"),("F","A")],
-    "distinct": ["A","D","E","F"]
-  },
-  "head": {   # 已观测到的部分（触发条件）
+  "head": {   # 观测到的部分（触发条件）- 看到一条碳链（降低要求到3个节点）
     "nodes": {
       "A": {"in": [LABEL_ID['C']]},
       "B": {"in": [LABEL_ID['C']]},
       "C": {"in": [LABEL_ID['C']]},
-      "D": {"in": [LABEL_ID['C']]}
     },
-    "edges": [("A","B"), ("B","C"), ("C","D")],
-    "distinct": ["A","B","C","D"]
+    "edges": [("A","B"), ("B","C")],
+    "distinct": ["A","B","C"]
+  },
+  "body": {   # 需要补全的部分（修复目标）- 完成苯环闭合（6个节点）
+    "nodes": {
+      "A": {"in": [LABEL_ID['C']]},
+      "B": {"in": [LABEL_ID['C']]},  # 添加B节点
+      "C": {"in": [LABEL_ID['C']]},
+      "D": {"in": [LABEL_ID['C']]},
+      "E": {"in": [LABEL_ID['C']]},
+      "F": {"in": [LABEL_ID['C']]}
+    },
+    "edges": [("A","B"), ("B","C"), ("C","D"), ("D","E"), ("E","F"), ("F","A")],  # 四条边闭合成C6环
+    "distinct": ["A","B","C","D","E","F"]  # 所有6个节点必须不同!
   }
 }
 
-TGD_C6_CLOSURE_2 = {
-    "name": "c6_closure_2",
-    "body": {   # 需要补全或验证的部分
-        "nodes": {
-        "A": {"in": [LABEL_ID['C']]},
-        "C": {"in": [LABEL_ID['C']]},
-        "D": {"in": [LABEL_ID['C']]},
-        "E": {"in": [LABEL_ID['C']]},
-        "F": {"in": [LABEL_ID['C']]}
-        },
-        "edges": [("A","F"),("F","E"),("E","D"),("D","C")],
-        "distinct": ["A","D","E","F","C"]
-    },
-    "head": {   # 已观测到的部分（触发条件）
-        "nodes": {
-        "A": {"in": [LABEL_ID['C']]},
-        "B": {"in": [LABEL_ID['C']]},
-        "C": {"in": [LABEL_ID['C']]},
-        },
-        "edges": [("A","B"), ("B","C")],
-        "distinct": ["A","B","C"]
-    }
-}    
+# TGD_C6_CLOSURE_2 = {
+#     "name": "c6_closure_2",
+#     "head": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
+#         "nodes": {
+#         "A": {"in": [LABEL_ID['C']]},
+#         "B": {"in": [LABEL_ID['C']]},
+#         "C": {"in": [LABEL_ID['C']]},
+#         "D": {"in": [LABEL_ID['C']]},
+#         "E": {"in": [LABEL_ID['C']]},
+#         "F": {"in": [LABEL_ID['C']]}
+#         },
+#         "edges": [("A","B"), ("B","C"), ("C","D"), ("D","E"), ("E","F")],
+#         "distinct": ["A","B","C","D","E","F"]
+#     },
+#     "body": {   # 需要补全或验证的部分 - 只要求闭合边
+#         "nodes": {
+#         "A": {"in": [LABEL_ID['C']]},
+#         "F": {"in": [LABEL_ID['C']]}
+#         },
+#         "edges": [("A","F")],  # 闭合苯环的边
+#         "distinct": ["A","F"]
+#     }
+# }    
 
-TGD_C6_CLOSURE_3 = {
-    "name": "c6_closure_3",
-    "body": {   # 需要补全或验证的部分
-        "nodes": {
-        "A": {"in": [LABEL_ID['C']]},
-        "B": {"in": [LABEL_ID['C']]},
-        "C": {"in": [LABEL_ID['C']]},
-        "G": {"in": [LABEL_ID['C']]}
-        },
-        "edges": [("A","B"), ("B","C"),("B","G")],
-        "distinct": ["A","B","C","G"]
-    },
-    "head": {   # 已观测到的部分（触发条件）
-        "nodes": {
-        "A": {"in": [LABEL_ID['C']]},
-        "C": {"in": [LABEL_ID['C']]},
-        "D": {"in": [LABEL_ID['C']]},
-        "E": {"in": [LABEL_ID['C']]},
-        "F": {"in": [LABEL_ID['C']]}
-        },
-        "edges": [("A","F"),("F","E"),("E","D"),("D","C")],
-        "distinct": ["A","D","E","F","C"]
-    }
-}
+# TGD_C6_CLOSURE_3 = {
+#     "name": "c6_closure_3",
+#     "head": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
+#         "nodes": {
+#         "A": {"in": [LABEL_ID['C']]},
+#         "B": {"in": [LABEL_ID['C']]},
+#         "C": {"in": [LABEL_ID['C']]},
+#         "D": {"in": [LABEL_ID['C']]},
+#         "E": {"in": [LABEL_ID['C']]},
+#         "F": {"in": [LABEL_ID['C']]}
+#         },
+#         "edges": [("A","B"), ("B","C"), ("C","D"), ("D","E"), ("E","F")],
+#         "distinct": ["A","B","C","D","E","F"]
+#     },
+#     "body": {   # 需要补全或验证的部分 - 只要求闭合边
+#         "nodes": {
+#         "A": {"in": [LABEL_ID['C']]},
+#         "F": {"in": [LABEL_ID['C']]}
+#         },
+#         "edges": [("F","A")],  # 闭合苯环的边
+#         "distinct": ["A","F"]
+#     }
+# }
 
 TGD_NITRO_ON_AROMATIC = {
     "name": "nitro_on_aromatic_completion",
@@ -252,12 +252,16 @@ TGD_AMINE_DI_C = {
 # Validate and register constraints for MUTAG.
 # Add more TGDs to this list as you design them.
 CONSTRAINTS_MUTAG: List[TGD] = []
+
+# === 苯环闭合约束（用于可视化测试）===
 validate_tgd(TGD_C6_CLOSURE_1)
 CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_1)
-validate_tgd(TGD_C6_CLOSURE_2)
-CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_2)
-validate_tgd(TGD_C6_CLOSURE_3)
-CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_3)
+# validate_tgd(TGD_C6_CLOSURE_2)
+# CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_2)
+# validate_tgd(TGD_C6_CLOSURE_3)
+# CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_3)
+
+# === 其他约束（暂时注释掉用于可视化测试）===
 validate_tgd(TGD_NITRO_ON_AROMATIC)
 CONSTRAINTS_MUTAG.append(TGD_NITRO_ON_AROMATIC)
 validate_tgd(TGD_C_DOUBLE_O_LIKE)
@@ -682,12 +686,118 @@ validate_tgd(TGD_CORA_GA_RULE_BRIDGE)
 CONSTRAINTS_CORA.append(TGD_CORA_GA_RULE_BRIDGE)
 
 
+# ----------------------------------------------------------------------
+# Constraints for BAShape (Node Classification)
+# ----------------------------------------------------------------------
+# BAShape is a Barabási-Albert (BA) graph with attached "house" motifs.
+# Node labels:
+#   0: BA base nodes (99%)
+#   1: house top nodes (2 per house, 0.4% total)
+#   2: house middle nodes (2 per house, 0.4% total)
+#   3: house bottom nodes (1 per house, 0.2% total)
+#
+# Actual house structure (verified from data, nodes 2000000-2000004):
+#   A, B = top nodes (label 1)
+#   C, D = middle nodes (label 2)
+#   E = bottom node (label 3)
+#   Edges (bidirectional): A-B, A-D, B-C, A-E, B-E, C-D
+#   NO direct connection between middle and bottom!
+#
+# Design goal: Explain why a node plays certain role
+# Constraints: HEAD (condition) → BODY (consequence)
+# Start with SIMPLE patterns that are easy to match!
+
+# TGD 1: Two tops connect → they should connect to a bottom
+# HEAD: If two tops A,B are connected
+# BODY: Then there should be a bottom E that connects both A and B
+TGD_BASHAPE_TOP_PAIR_TO_BOTTOM = {
+    "name": "bashape_top_pair_to_bottom",
+    "head": {
+        "nodes": {
+            "A": {"in": [1]},  # top 1
+            "B": {"in": [1]},  # top 2
+        },
+        "edges": [("A", "B")],  # two tops connected
+        "distinct": ["A", "B"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": [1]},
+            "B": {"in": [1]},
+            "E": {"in": [3]},  # bottom
+        },
+        "edges": [("A", "E"), ("B", "E")],  # both tops connect to bottom
+        "distinct": ["A", "B", "E"]
+    }
+}
+
+# TGD 2: Two tops connect → they should each connect to a middle, and middles connect
+# HEAD: If two tops A,B are connected  
+# BODY: Then there should be middles C,D where A-C, B-D, and C-D
+TGD_BASHAPE_TOP_PAIR_TO_MIDDLES = {
+    "name": "bashape_top_pair_to_middles",
+    "head": {
+        "nodes": {
+            "A": {"in": [1]},  # top 1
+            "B": {"in": [1]},  # top 2
+        },
+        "edges": [("A", "B")],  # two tops connected
+        "distinct": ["A", "B"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": [1]},
+            "B": {"in": [1]},
+            "C": {"in": [2]},  # middle 1
+            "D": {"in": [2]},  # middle 2
+        },
+        "edges": [("A", "D"), ("B", "C"), ("C", "D")],  # cross-connect + middle-middle
+        "distinct": ["A", "B", "C", "D"]
+    }
+}
+
+# TGD 3: Top connects middle and bottom → another top should exist
+# HEAD: If top A connects middle C and bottom E
+# BODY: Then there should be another top B that connects A, C, and E
+TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE = {
+    "name": "bashape_top_middle_bottom_closure",
+    "head": {
+        "nodes": {
+            "A": {"in": [1]},  # top
+            "C": {"in": [2]},  # middle
+            "E": {"in": [3]},  # bottom
+        },
+        "edges": [("A", "C"), ("A", "E")],  # top connects middle and bottom
+        "distinct": ["A", "C", "E"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": [1]},
+            "B": {"in": [1]},  # another top
+            "C": {"in": [2]},
+            "E": {"in": [3]},
+        },
+        "edges": [("A", "B"), ("B", "E")],  # tops connect, other top connects bottom
+        "distinct": ["A", "B", "C", "E"]
+    }
+}
+
+# Validate and register BAShape constraints
+CONSTRAINTS_BASHAPE: List[TGD] = []
+validate_tgd(TGD_BASHAPE_TOP_PAIR_TO_BOTTOM)
+CONSTRAINTS_BASHAPE.append(TGD_BASHAPE_TOP_PAIR_TO_BOTTOM)
+validate_tgd(TGD_BASHAPE_TOP_PAIR_TO_MIDDLES)
+CONSTRAINTS_BASHAPE.append(TGD_BASHAPE_TOP_PAIR_TO_MIDDLES)
+validate_tgd(TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE)
+CONSTRAINTS_BASHAPE.append(TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE)
+
+
 # Central registry by dataset key.
 _REGISTRY: Dict[str, List[TGD]] = {
     'MUTAG': CONSTRAINTS_MUTAG,
     'YELP': CONSTRAINTS_YELP,
     'CORA': CONSTRAINTS_CORA,
-    # 'BASHAPE': [...],   # placeholder for future constraints
+    'BASHAPE': CONSTRAINTS_BASHAPE,
     # 'ATLAS': [...],
 }
 
@@ -710,5 +820,6 @@ __all__ = [
     'CONSTRAINTS_MUTAG',
     'CONSTRAINTS_YELP',
     'CONSTRAINTS_CORA',
+    'CONSTRAINTS_BASHAPE',
     'get_constraints',
 ]

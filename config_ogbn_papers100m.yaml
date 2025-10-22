@@ -1,0 +1,62 @@
+# Configuration for ogbn-papers100M Scalability Test
+
+# Add this section to your config.yaml for ogbn-papers100M experiments
+
+# ============================================================================
+# OGBN-Papers100M Configuration (Scalability Test)
+# ============================================================================
+
+# To use this configuration, uncomment the following lines and comment out
+# other dataset configurations (BAShape, Cora, MUTAG, etc.)
+
+# data_name: "ogbn-papers100M"
+# data_size: 111059956      # 111M nodes
+# num_edges: 1615685872     # 1.6B edges
+# input_dim: 128            # Node feature dimension
+# output_dim: 172           # Number of arXiv subject areas
+# num_test: 138949          # Test set size (papers published >= 2019)
+# 
+# # Model configuration for 2-layer GCN
+# model_name: "gcn2"        # 2-layer GCN
+# hidden_dim: 256           # Hidden dimension (can reduce to 128/64 if memory limited)
+# 
+# # Training configuration
+# num_epochs: 100           # Number of epochs
+# learning_rate: 0.01       # Learning rate
+# weight_decay: 0.0         # Weight decay (L2 regularization)
+# dropout: 0.5              # Dropout rate
+# 
+# # Experiment settings (for explanation after training)
+# L: 2                      # 2-hop neighborhood
+# k: 6                      # window size
+# Budget: 8                 # repair budget
+# mask_ratio: 0.05          # 5% edge masking
+# preserve_connectivity: true
+# 
+# # Target nodes for explanation (will be sampled from test set)
+# num_target_nodes: 100     # Number of nodes to explain
+# # target_nodes will be auto-sampled from correctly predicted test nodes
+
+# ============================================================================
+# Notes for HPC Usage:
+# ============================================================================
+# 
+# 1. Dataset Size:
+#    - ~60GB on disk
+#    - ~50GB in memory
+#    - Requires 256GB+ RAM or GPU with 40GB+ VRAM
+#
+# 2. Training Time:
+#    - Full training: ~48 hours on single GPU
+#    - Consider reducing epochs or using distributed training
+#
+# 3. Slurm Submission:
+#    sbatch train_ogbn_papers100m.slurm
+#
+# 4. Monitor Job:
+#    squeue -u $USER
+#    tail -f logs/ogbn_papers100m_<job_id>.out
+#
+# 5. Model Output:
+#    - Saved to: models/OGBN_Papers100M_gcn2_model.pth
+#    - Results: models/OGBN_Papers100M_training_results.json

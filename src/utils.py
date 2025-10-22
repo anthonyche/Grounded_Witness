@@ -113,6 +113,119 @@ def dataset_func(config):
         print(data)
         return data
     
+    if data_name == "BAShape":
+        # Load BAShape dataset for node classification
+        # BAShape is a BA graph with house motifs attached
+        # Labels: 0=BA base (99%), 1=house top (0.4%), 2=house middle (0.4%), 3=house bottom (0.2%)
+        data_path = os.path.join(data_dir, 'BAShape', 'BAShape.pt')
+        
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"BAShape dataset not found at {data_path}. Please generate it first.")
+        
+        print(f"[dataset_func] Loading BAShape dataset from {data_path}...")
+        data = torch.load(data_path)
+        
+        print(f"[dataset_func] Original BAShape data: nodes={data.num_nodes}, edges={data.edge_index.size(1)}")
+        
+        # Ensure undirected graph (BAShape should already be undirected)
+        if not hasattr(data, 'is_undirected') or not data.is_undirected():
+            data = ToUndirected()(data)
+            print(f"[dataset_func] After ToUndirected: edges={data.edge_index.size(1)}")
+        
+        # Update config with dataset-derived dimensions
+        config['input_dim'] = data.x.size(1) if data.x is not None else 1
+        config['output_dim'] = int(data.y.max().item()) + 1  # 4 labels: 0,1,2,3
+        config['num_nodes'] = data.num_nodes
+        config['multi_label'] = False
+        
+        print(f"[dataset_func] BAShape dimensions: input_dim={config['input_dim']}, output_dim={config['output_dim']}, num_nodes={config['num_nodes']}")
+        
+        # Create train/val/test masks if not present
+        if not hasattr(data, 'train_mask') or data.train_mask is None:
+            print(f"[dataset_func] Creating train/val/test splits...")
+            num_nodes = data.num_nodes
+            
+            # Use label-stratified sampling to ensure each split has house nodes
+            # House nodes (labels 1,2,3) are rare, so we need to be careful
+            house_indices = (data.y > 0).nonzero(as_tuple=True)[0]  # labels 1,2,3
+            ba_indices = (data.y == 0).nonzero(as_tuple=True)[0]     # label 0
+            
+            print(f"[dataset_func] House nodes: {len(house_indices)} ({100*len(house_indices)/num_nodes:.2f}%)")
+            print(f"[dataset_func] BA base nodes: {len(ba_indices)} ({100*len(ba_indices)/num_nodes:.2f}%)")
+            
+            # Split house nodes: 60% train, 20% val, 20% test
+            gen = torch.Generator()
+            gen.manual_seed(random_seed)
+            house_perm = torch.randperm(len(house_indices), generator=gen)
+            
+            house_train_size = int(0.6 * len(house_indices))
+            house_val_size = int(0.2 * len(house_indices))
+            
+            house_train = house_indices[house_perm[:house_train_size]]
+            house_val = house_indices[house_perm[house_train_size:house_train_size+house_val_size]]
+            house_test = house_indices[house_perm[house_train_size+house_val_size:]]
+            
+            # Split BA nodes: 60% train, 20% val, 20% test
+            ba_perm = torch.randperm(len(ba_indices), generator=gen)
+            
+            ba_train_size = int(0.6 * len(ba_indices))
+            ba_val_size = int(0.2 * len(ba_indices))
+            
+            ba_train = ba_indices[ba_perm[:ba_train_size]]
+            ba_val = ba_indices[ba_perm[ba_train_size:ba_train_size+ba_val_size]]
+            ba_test = ba_indices[ba_perm[ba_train_size+ba_val_size:]]
+            
+            # Combine splits
+            train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            
+            train_mask[torch.cat([house_train, ba_train])] = True
+            val_mask[torch.cat([house_val, ba_val])] = True
+            test_mask[torch.cat([house_test, ba_test])] = True
+            
+            data.train_mask = train_mask
+            data.val_mask = val_mask
+            data.test_mask = test_mask
+            
+            print(f"[dataset_func] Splits: train={train_mask.sum()}, val={val_mask.sum()}, test={test_mask.sum()}")
+        
+        # Get target nodes for explanation (sample from test set, prioritize house nodes)
+        target_nodes = config.get('target_nodes', None)
+        if target_nodes is None:
+            # Sample house nodes from test set for explanation
+            num_samples = config.get('num_target_nodes', 50)
+            test_house_indices = torch.logical_and(data.test_mask, data.y > 0).nonzero(as_tuple=True)[0]
+            
+            if len(test_house_indices) > num_samples:
+                gen = torch.Generator()
+                gen.manual_seed(random_seed)
+                perm = torch.randperm(len(test_house_indices), generator=gen)
+                target_nodes = test_house_indices[perm[:num_samples]].tolist()
+            else:
+                target_nodes = test_house_indices.tolist()
+            
+            print(f"[dataset_func] Sampled {len(target_nodes)} house nodes from test set as targets")
+        else:
+            print(f"[dataset_func] Using {len(target_nodes)} pre-defined target nodes")
+        
+        # Return data resource dictionary (consistent with Yelp format)
+        data_resource = {
+            "data": data,
+            "input_dim": config['input_dim'],
+            "output_dim": config['output_dim'],
+            "num_nodes": config['num_nodes'],
+            "multi_label": False,
+            "splits": {
+                "train_mask": data.train_mask,
+                "val_mask": data.val_mask,
+                "test_mask": data.test_mask
+            },
+            "target_nodes": target_nodes
+        }
+        
+        return data_resource
+    
     if data_name == "Yelp":
         # Load Yelp dataset for node classification
         data_root = config.get("data_root", data_dir)

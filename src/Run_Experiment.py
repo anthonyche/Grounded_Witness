@@ -171,7 +171,9 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
         base_graph,
         constraints,
         max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     _debug_scan_head_matches(masked_graph, constraints, tag="masked")
     masked_graph._clean = base_graph
@@ -289,7 +291,9 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
         base_graph,
         constraints,
         max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     masked_graph = _graph_to_device(masked_graph, device)
 
@@ -374,7 +378,9 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
         base_graph,
         constraints,
         max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     masked_graph = _graph_to_device(masked_graph, device)
 
@@ -497,7 +503,9 @@ def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], data
         base_graph,
         constraints,
         max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     if verbose:
         _debug_scan_head_matches(masked_graph, constraints, tag="masked")
@@ -609,7 +617,7 @@ def main() -> None:
 
     # Detect task type based on data_name
     data_name = config.get("data_name", "MUTAG")
-    is_node_classification = data_name in ["Cora", "CiteSeer", "PubMed", "Yelp", "BAHouse"]
+    is_node_classification = data_name in ["Cora", "CiteSeer", "PubMed", "Yelp", "BAHouse", "BAShape"]
     
     if is_node_classification:
         print(f"[Run_Experiment] Detected node classification task: {data_name}")

@@ -1,0 +1,140 @@
+#!/bin/bash
+#SBATCH --job-name=ogbn_papers100m_gcn
+#SBATCH --output=logs/ogbn_papers100m_%j.out
+#SBATCH --error=logs/ogbn_papers100m_%j.err
+#SBATCH --time=48:00:00              # 48 hours (large dataset)
+#SBATCH --partition=gpu              # GPU partition
+#SBATCH --gres=gpu:1                 # Request 1 GPU
+#SBATCH --cpus-per-task=8            # 8 CPU cores
+#SBATCH --mem=256G                   # 256GB RAM (dataset ~60GB + model + overhead)
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+
+# Note: ogbn-papers100M is a very large dataset
+# Dataset size: ~60GB on disk, ~50GB in memory
+# Recommended: GPU with 40GB+ VRAM (A100/V100) or use CPU with large RAM
+
+echo "=================================================="
+echo "SLURM Job: Training GCN on ogbn-papers100M"
+echo "=================================================="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "Start time: $(date)"
+echo "=================================================="
+echo ""
+
+# Print system info
+echo "System Information:"
+nvidia-smi
+echo ""
+echo "CPU Info:"
+lscpu | grep "Model name"
+echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+echo ""
+
+# Load modules (adjust based on your HPC environment)
+module purge
+module load python/3.10
+module load cuda/11.8
+module load cudnn/8.6
+
+# Activate virtual environment (create if needed)
+if [ ! -d "venv_ogbn" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv_ogbn
+    source venv_ogbn/bin/activate
+    
+    echo "Installing dependencies..."
+    pip install --upgrade pip
+    pip install torch==2.0.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    pip install torch-geometric
+    pip install pyg-lib torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.0.1+cu118.html
+    pip install ogb
+    pip install pyyaml
+    pip install tqdm
+else
+    source venv_ogbn/bin/activate
+fi
+
+echo ""
+echo "Python environment:"
+which python
+python --version
+echo ""
+
+# Create necessary directories
+mkdir -p logs
+mkdir -p models
+mkdir -p datasets
+
+# Set environment variables
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+echo "Environment variables:"
+echo "  OMP_NUM_THREADS: $OMP_NUM_THREADS"
+echo "  PYTORCH_CUDA_ALLOC_CONF: $PYTORCH_CUDA_ALLOC_CONF"
+echo ""
+
+# Training configuration
+EPOCHS=100
+LR=0.01
+HIDDEN_DIM=256
+DROPOUT=0.5
+WEIGHT_DECAY=0.0
+LOG_STEPS=1
+
+echo "=================================================="
+echo "Training Configuration:"
+echo "=================================================="
+echo "  Dataset: ogbn-papers100M"
+echo "  Model: 2-layer GCN"
+echo "  Epochs: $EPOCHS"
+echo "  Learning rate: $LR"
+echo "  Hidden dimension: $HIDDEN_DIM"
+echo "  Dropout: $DROPOUT"
+echo "  Weight decay: $WEIGHT_DECAY"
+echo "=================================================="
+echo ""
+
+# Run training
+echo "Starting training..."
+echo ""
+
+python src/Train_OGBN_HPC.py \
+    --config config.yaml \
+    --data_root ./datasets \
+    --epochs $EPOCHS \
+    --lr $LR \
+    --hidden_dim $HIDDEN_DIM \
+    --dropout $DROPOUT \
+    --weight_decay $WEIGHT_DECAY \
+    --log_steps $LOG_STEPS \
+    --save_dir models
+
+TRAIN_EXIT_CODE=$?
+
+echo ""
+echo "=================================================="
+echo "Training completed with exit code: $TRAIN_EXIT_CODE"
+echo "End time: $(date)"
+echo "=================================================="
+
+# Print final GPU memory usage
+if command -v nvidia-smi &> /dev/null; then
+    echo ""
+    echo "Final GPU memory usage:"
+    nvidia-smi
+fi
+
+# Print disk usage
+echo ""
+echo "Disk usage:"
+du -sh datasets/
+du -sh models/
+echo ""
+
+# Deactivate environment
+deactivate
+
+exit $TRAIN_EXIT_CODE

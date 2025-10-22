@@ -1,36 +1,39 @@
 # exp_name: pgexplainer_mutag
 # exp_name: gnnexplainer_mutag
-# exp_name: apxchase_mutag
+exp_name: heuchase_ogbn
 # exp_name: heuchase_mutag
-exp_name: heuchase_mutag
+# exp_name: pgexplainer_bashape
 random_seed: 42
 
 # ---- Experiment hyperparameters ----
-L: 3             # hop / num GNN layers (reduced from 3 to 1 for Yelp - dense graph!)
+L: 2             # hop / num GNN layers (2-hop for BAShape to capture house structure)
 k: 6      # window size (increased for more diversity in case study)
 Budget: 8        # repair budget (1,2,4,6,8) - increased to allow backchase completion
 alpha: 0.2      # conciseness weight (slightly reduced)
 beta: 0.2       # repair penalty weight (increased to reward clean explanations)
 gamma: 0.6       # coverage weight (kept dominant for diversity)
-max_masks : 3
-heuchase_m: 100  # num of candidates for heuchase
-heuchase_noise_std: 0.1  # noise level for Edmonds sampling (higher = more diversity)
+max_masks : 3    # (DEPRECATED) Use mask_ratio instead for node classification
+mask_ratio: 0.05  # Ratio of edges to mask in L-hop subgraph (0.0-1.0), e.g., 0.15 = 15%
+preserve_connectivity: true  # Only mask non-bridge edges to keep graph connected
+heuchase_m: 20  # num of candidates for heuchase
+heuchase_noise_std: 0.2  # noise level for Edmonds sampling (higher = more diversity)
 
 # ---- GNN Model ----
 # model_name: "gcn_graph_3" # gat_graph, gcn_graph, change along with L gat_yelp, gcn_yelp_3, sage_yelp, gcn_yelp_1, gcn_yelp_2
-hidden_dim: 32
+hidden_dim: 16  # BAShape,OGBN_100M model was trained with hidden_dim=16
 #gat_graph_3, gcn_graph_1, gcn_graph_2, gcn_graph_3, sage_graph_3
-model_name: "gcn_graph_3" 
+model_name: "gcn2" 
+# hidden_dim: 32 #默认32， BAShape是用的16
 # ---- Data ----
-data_name: "MUTAG"
-data_size: 188          # total number of graphs
-input_dim: 7
-output_dim: 2
-batch_size: 32
-train_ratio: 0.8
-val_ratio: 0.1
-test_ratio: 0.1
-num_test: 0
+# data_name: "MUTAG"
+# data_size: 188          # total number of graphs
+# input_dim: 7
+# output_dim: 2
+# batch_size: 32
+# train_ratio: 0.8
+# val_ratio: 0.1
+# test_ratio: 0.1
+# num_test: 0
 
 # data_name: "Yelp"
 # data_size: 716847
@@ -52,6 +55,13 @@ num_test: 0
 #        94,95,96,97,98,99] # set of target nodes to be explained
 
 
+data_name: "ogbn-papers100M"
+data_size: 111059956      # 111M nodes
+num_edges: 1615685872     # 1.6B edges
+input_dim: 128            # Node feature dimension
+output_dim: 172           # Number of arXiv subject areas
+num_test: 138949          # Test set size (papers published >= 2019)
+
 # data_name: "Cora"
 # data_size: 2708
 # num_test: 541  # Standard Cora split: ~20% test (was 1, causing 0% accuracy)
@@ -61,33 +71,27 @@ num_test: 0
 #      9,    1311, 814, 2281, 1097, 242 , 1133, 1394, 2013, 794 , 
 #      2430, 1331, 6  , 1581, 185 , 1815] #1% test nodes to explain
 
-
+# 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,18,19,20,21,22,23,24,25,26,
+#      27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52
 # # ---- Training ----
 # num_epochs: 200
 # learning_rate: 0.01
 # weight_decay: 0.0005
 
 
-# Historical settings for reference:
-# data_name: "BAHouse"
+# # # BAShape settings:
+# data_name: "BAShape"
 # data_size: 2020000
 # num_edges: 12055704
 # num_test: 404000  # 20% of nodes for testing
 # input_dim: 1
-# output_dim: 4  # {top, middle, bottom, non-house}
-# vt: 100
-# VT: [0,1,2,3,4,5,6,7,8,9,
-#     10,11,12,13,14,15,16,17,18,19,
-#     20,21,22,23,24,25,26,27,28,29,
-#     30,31,32,33,34,35,36,37,38,39,
-#     40,41,42,43,44,45,46,47,48,49,
-#     50,51,52,53,54,55,56,57,58,59,
-#     60,61,62,63,64,65,66,67,68,69,
-#     70,71,72,73,74,75,76,77,78,79,
-#     80,81,82,83,84,85,86,87,88,89,
-#     90,91,92,93,94,95,96,97,98,99]
+# output_dim: 4  # {0: BA base, 1: house top, 2: house middle, 3: house bottom}
+num_target_nodes: 100  # Auto-sample 100 house nodes from test set
+# target_nodes will be automatically sampled from test set house nodes (labels 1,2,3)
 
 # 可选
 graph_index: 2   # 不传 --input 时回退用
-save_dir: results/MUTAG/heuchase_mutag  # 不传 --output 时回退用
+# save_dir: results/MUTAG/heuchase_mutag  # 不传 --output 时回退用
+# save_dir: results/MUTAG/pgexplainer_mutag
+# save_dir: results/MUTAG/apxchase_mutag
 max_enforce_iterations: 50  # Maximum iterations for exhaustive enforcement (reduced for faster testing)

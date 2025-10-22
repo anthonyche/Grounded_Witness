@@ -531,9 +531,11 @@ class ApxChase:
             minimal number of BODY edges that must be added for this binding to satisfy BODY.
         4) If the minimal repair cost over all bindings ≤ B, the constraint is grounded.
             Accumulate the minimal repair cost per-constraint into `Gs._rep_sum` for downstream rpr().
+        5) Collect all repair edges for visualization.
         """
         grounded_names: Set[str] = set()
         total_rep = 0
+        all_repair_edges: Set[Tuple[int, int]] = set()  # Store repair edges (in full graph IDs)
 
         # Required hooks
         if find_head_matches is None or Sigma is None or backchase_repair_cost is None:
@@ -567,6 +569,17 @@ class ApxChase:
                 matches = []
 
             best_rep = None
+            best_repair_edges = []
+            
+            # Debug: print witness nodes before checking constraints
+            if self.debug and matches:
+                witness_nodes = set(nodes_in_full)
+                # Get edges from PyTorch Geometric Data object
+                edge_index = Gs.edge_index
+                witness_edges = [(int(edge_index[0, i]), int(edge_index[1, i])) for i in range(edge_index.size(1))]
+                print(f"[DEBUG REPAIR] Witness has {len(witness_nodes)} nodes: {sorted(witness_nodes)}")
+                print(f"[DEBUG REPAIR] Witness has {len(witness_edges)} edges: {witness_edges}")
+            
             # 2–3) Evaluate strict repair cost on clean graph for each binding
             for bind_view in matches:
                 try:
@@ -574,39 +587,78 @@ class ApxChase:
                 except Exception:
                     continue
                 try:
-                    rep_cost = backchase_repair_cost(G_clean, tgd, bind_full, B)
-                except Exception:
-                    rep_cost = None
+                    if self.debug:
+                        print(f"[DEBUG REPAIR] Checking constraint '{name}' with binding: {bind_full}")
+                    # 传入witness_nodes限制BODY搜索范围
+                    rep_result = backchase_repair_cost(G_clean, tgd, bind_full, B, witness_nodes=witness_nodes)
+                    if self.debug and rep_result:
+                        print(f"[DEBUG REPAIR]   → rep_cost={rep_result[1]}, repairs={rep_result[2] if len(rep_result) > 2 else 'N/A'}")
+                except Exception as e:
+                    rep_result = None
 
-                # Normalize different possible return types to a numeric cost
-                # Acceptable forms:
-                #   - int/float cost
-                #   - (cost, ...) tuple or [cost, ...] list
-                #   - { 'cost': cost, ... } dict
-                if isinstance(rep_cost, (tuple, list)):
-                    rep_cost = rep_cost[0] if len(rep_cost) > 0 else None
-                elif isinstance(rep_cost, dict):
-                    rep_cost = rep_cost.get('cost', None)
+                # backchase_repair_cost returns (within_budget: bool, cost: int, repairs: List[Tuple[int, int]])
+                if rep_result is None:
+                    continue
+                    
+                # Parse the result tuple
+                if isinstance(rep_result, (tuple, list)) and len(rep_result) >= 3:
+                    within_budget, rep_cost, repairs = rep_result[0], rep_result[1], rep_result[2]
+                elif isinstance(rep_result, (tuple, list)) and len(rep_result) >= 1:
+                    # Fallback: old format (cost only)
+                    rep_cost = rep_result[0]
+                    repairs = []
+                elif isinstance(rep_result, dict):
+                    rep_cost = rep_result.get('cost', None)
+                    repairs = rep_result.get('repairs', [])
+                else:
+                    rep_cost = rep_result
+                    repairs = []
 
                 # Ensure rep_cost is numeric
                 if rep_cost is None:
                     continue
                 if not isinstance(rep_cost, (int, float)):
-                    # Unrecognized form; skip this binding safely
                     continue
 
                 if rep_cost <= B:
                     if best_rep is None or rep_cost < best_rep:
                         best_rep = int(rep_cost)
+                        best_repair_edges = repairs
 
+            # 检查是否找到了有效的repair，并且累积cost不超过budget
             if best_rep is not None and best_rep <= B:
-                grounded_names.add(name)
-                total_rep += best_rep
+                # 检查累积的total_rep + 当前constraint的cost是否超过budget
+                if total_rep + best_rep <= B:
+                    grounded_names.add(name)
+                    total_rep += best_rep
+                    # Collect repair edges
+                    # Include edges with hypothetical nodes (-1) to show conceptual repairs
+                    for edge in best_repair_edges:
+                        if isinstance(edge, (tuple, list)) and len(edge) == 2:
+                            u, v = edge
+                            # Keep all repairs including those with -1 (hypothetical nodes)
+                            # Visualization will filter based on actual node existence
+                            all_repair_edges.add((u, v) if u <= v else (v, u))
+                            if u >= 0 and v >= 0:
+                                print(f"[DEBUG] Found concrete repair edge for '{name}': ({u}, {v})")
+                    if self.debug:
+                        print(f"[DEBUG REPAIR] Constraint '{name}' grounded with cost={best_rep}, cumulative total_rep={total_rep}")
+                else:
+                    # 累积cost会超过budget，跳过这个constraint
+                    if self.debug:
+                        print(f"[DEBUG REPAIR] Constraint '{name}' skipped: would exceed budget (total_rep={total_rep} + {best_rep} > {B})")
 
         # Persist accumulated repair cost for rpr(Gs)
         try:
             setattr(Gs, '_rep_sum', float(total_rep))
         except Exception:
+            pass
+        
+        # Persist repair edges for visualization (as list of tuples)
+        # Store repair edges unconditionally to reflect current state
+        try:
+            setattr(Gs, '_repair_edges', list(all_repair_edges))
+        except Exception as e:
             pass
 
         return grounded_names
@@ -918,18 +970,20 @@ class ApxChase:
                             self._log(f"      → Admitted: coverage |Γ(W_k)|={len(covered)}; heap size={len(W_k)}")
                     
                     # Early stopping: if all constraints are grounded, stop
-                    if len(covered) >= len(self.Sigma):
-                        if self.debug:
-                            self._log(f"  Early stop at center {center_idx+1}: all {len(self.Sigma)} constraints grounded!")
-                        break
+                    # Temporarily disabled for visualization testing with single constraint
+                    # if len(covered) >= len(self.Sigma):
+                    #     if self.debug:
+                    #         self._log(f"  Early stop at center {center_idx+1}: all {len(self.Sigma)} constraints grounded!")
+                    #     break
             
             if (self.debug or center_idx % 5 == 0) and n_candidates > 0:
                 self._log(f"  Center {center_idx+1} stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}")
             
             # Check early stop condition for center loop
-            if len(covered) >= len(self.Sigma):
-                self._log(f"All constraints covered after {center_idx+1}/{N} centers, stopping early.")
-                break
+            # Temporarily disabled for visualization testing with single constraint
+            # if len(covered) >= len(self.Sigma):
+            #     self._log(f"All constraints covered after {center_idx+1}/{N} centers, stopping early.")
+            #     break
         
         # Fallback: if no candidates admitted, add H itself
         if len(W_k) == 0:

@@ -2,7 +2,10 @@
 
 """Constraint-driven edge masking for triggering backchase on MUTAG (and similar graphs).
 
-设计目标：
+设计目标（贴合        prefer_longer_heads: 若为 True，则优先从 head 较长（边数更多）的约束里挑边（更容易形成"部分可见"→"需要修复"的情形）。
+        preserve_connectivity: 若为 True，则只删除不会导致图不连通的边（即非桥边）。
+
+    返回：定）：
 - 优先删除 **TGD head** 中的一条边，使得 head 仍可被部分匹配、而 body 需要通过 backchase 修复；
 - 避免纯随机删边（随机仅用于在可选候选中打破平 ties）。
 
@@ -12,12 +15,12 @@
   nodes: Dict[var_name, {"in": [label_ids]}], edges: List[Tuple[str,str]]，distinct: List[str]
 
 本文件提供：
-- mask_edges_by_constraints(data, constraints, max_masks=1, mask_ratio=None, seed=None):
-    给定一个 PyG Data（单图或L-hop子图）、TGD 列表，优先从 head 匹配里的边中挑选、并在 edge_index 中删除对应无向边（两条反向有向边）。
+- mask_edges_by_constraints(data, constraints, max_masks=1, seed=None):
+    给定一个 PyG Data（单图）、TGD 列表，优先从 head 匹配里的边中挑选、并在 edge_index 中删除对应无向边（两条反向有向边）。
     返回 (new_data, dropped_edges)，其中 dropped_edges 为 [(u,v), ...] 无向端点对。
 
 注意：
-- MUTAG 是无向图，但在 PyG 中通常用双向有向边表示。我们按"无向对"来去重与删除。
+- MUTAG 是无向图，但在 PyG 中通常用双向有向边表示。我们按“无向对”来去重与删除。
 - 如果某些 TGD 没有 head 匹配，函数会回退为空操作（不删边）。
 """
 
@@ -115,17 +118,25 @@ def mask_edges_by_constraints(
     if mask_ratio is not None:
         # 计算图中无向边总数（edge_index是有向的，除以2得到无向边数）
         total_undirected_edges = data.edge_index.size(1) // 2
-        # 特殊处理: mask_ratio=0.0 时不删除任何边
-        if mask_ratio == 0.0:
-            max_masks = 0
-        else:
-            max_masks = max(1, int(total_undirected_edges * mask_ratio))
+        max_masks = max(1, int(total_undirected_edges * mask_ratio))
         print(f"[mask_edges_by_constraints] Using mask_ratio={mask_ratio:.2f}: "
               f"total_edges={total_undirected_edges}, will_mask={max_masks}")
-    
-    # 如果 max_masks=0，直接返回原图
-    if max_masks == 0:
-        return data, []
+    """优先从各 TGD 的 head 匹配中，选取若干无向边进行删除，以便触发 backchase。
+
+    参数：
+        data: PyG 的 Data（单图）。要求包含 x, edge_index（无向图通常用双向有向边表示）。
+        constraints: TGD 列表（来自 constraints.py）。
+        max_masks: 最多删除多少条“无向边”（默认 1）。
+        seed: 随机种子（用于在候选中打破平局），None 表示不固定。
+        prefer_longer_heads: 若为 True，则优先从 head 较长（边数更多）的约束里挑边（更容易形成“部分可见”→“需要修复”的情形）。
+
+    返回：
+        (new_data, dropped_edges)
+        new_data: 拷贝后的 Data，其中 edge_index 已删除对应边。
+        dropped_edges: 被删除的无向端点列表 [(u,v), ...]（u<v）。
+    """
+    if seed is not None:
+        random.seed(seed)
 
     # 收集所有候选 head 边（经由匹配得到变量绑定，再把变量名映射到实际节点 ID，最后把 head.edges 投影为实际边）。
     candidate_keys: List[Tuple[int, int]] = []  # 无向边键集合（带重复，后续去重与打分）

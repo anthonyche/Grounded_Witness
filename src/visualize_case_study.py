@@ -130,22 +130,29 @@ def _draw_overlay_case(masked_graph: Data,
     # Assign colors based on atom type
     node_colors = [atom_colors[label] for label in node_labels]
     
-    # Increase width to accommodate legend on the right without squishing the molecule
-    plt.figure(figsize=(11, 6))
+    # Adjusted figure size (legend removed, so can use smaller width)
+    plt.figure(figsize=(8, 6))
     
-    # Draw nodes with atom-specific colors
+    # Draw nodes with atom-specific colors (alpha=1.0 for solid/opaque nodes)
     nx.draw_networkx_nodes(G, pos, node_size=300, node_color=node_colors, 
-                          linewidths=1.5, edgecolors='black', alpha=0.9)
+                          linewidths=1.5, edgecolors='black', alpha=1.0)
     
-    # Draw all edges from the base graph first (solid grey)
-    # These include both remaining and masked edges
-    nx.draw_networkx_edges(G, pos, width=1.0, edge_color="#BBBBBB", alpha=0.7)
+    # Draw only remaining edges (not masked edges) as solid grey background
+    # Only draw edges that are NOT in masked_edges set
+    if clean_graph is not None:
+        remaining_edges_list = list(remaining_edges)
+        if len(remaining_edges_list) > 0:
+            nx.draw_networkx_edges(G, pos, edgelist=remaining_edges_list,
+                                  width=1.0, edge_color="#000000", alpha=0.7)
+    else:
+        # If no clean graph provided, draw all edges
+        nx.draw_networkx_edges(G, pos, width=1.0, edge_color="#000000", alpha=0.7)
     
-    # Overlay masked edges with dashed light blue style (thicker and more visible)
-    if len(masked_edges) > 0:
-        nx.draw_networkx_edges(G, pos, edgelist=list(masked_edges),
-                              width=2.5, edge_color="#4A90E2", alpha=0.8,
-                              style='dashed')
+    # Masked edges are completely hidden (not drawn at all)
+    # if len(masked_edges) > 0:
+    #     nx.draw_networkx_edges(G, pos, edgelist=list(masked_edges),
+    #                           width=2.5, edge_color="#4A90E2", alpha=0.8,
+    #                           style='dashed')
 
     # Overlay witness edges in bold red (on top of everything)
     # IMPORTANT: Witness uses relabeled node IDs (0-indexed). 
@@ -208,34 +215,146 @@ def _draw_overlay_case(masked_graph: Data,
                                width=3.5,
                                edge_color="red",
                                alpha=0.95)
+    
+    # Draw repair edges in orange (hypothetical edges needed to complete constraints)
+    # Repair edges are stored in witness_graph._repair_edges as list of (u, v) tuples
+    # These are in full-graph coordinate system
+    repair_edges = getattr(witness_graph, '_repair_edges', [])
+    print(f"[VIZ DEBUG] Total repair edges for this witness: {len(repair_edges)}")
+    if len(repair_edges) > 0:
+        print(f"[VIZ DEBUG] Repair edges list: {repair_edges}")
+        # Filter repair edges to show both concrete and hypothetical repairs
+        valid_repair_edges = []
+        witness_node_set = set()
+        for u, v in overlay_edges:
+            witness_node_set.add(u)
+            witness_node_set.add(v)
+        print(f"[VIZ DEBUG] Witness node set: {witness_node_set}")
+        
+        for edge in repair_edges:
+            if isinstance(edge, (tuple, list)) and len(edge) == 2:
+                u, v = edge
+                
+                # Case 1: Concrete repair edge (u, v) where both are real nodes
+                if u >= 0 and v >= 0:
+                    # Only show if edge exists in base graph but not in witness
+                    has_node_u = G.has_node(u)
+                    has_node_v = G.has_node(v)
+                    print(f"[VIZ DEBUG] Checking concrete edge ({u}, {v}): has_node_u={has_node_u}, has_node_v={has_node_v}")
+                    
+                    if has_node_u and has_node_v:
+                        has_edge = G.has_edge(u, v) or G.has_edge(v, u)
+                        in_witness = (u, v) in overlay_edges or (v, u) in overlay_edges
+                        u_in_witness = u in witness_node_set
+                        v_in_witness = v in witness_node_set
+                        print(f"[VIZ DEBUG]   has_edge={has_edge}, in_witness={in_witness}, u_in_witness={u_in_witness}, v_in_witness={v_in_witness}")
+                        print(f"[VIZ DEBUG]   Clean graph edges from {u}: {list(G.neighbors(u))}")
+                        print(f"[VIZ DEBUG]   Clean graph edges from {v}: {list(G.neighbors(v))}")
+                        
+                        if has_edge and not in_witness:
+                            # Edge exists in clean graph but missing from witness - INTERNAL repair!
+                            if u_in_witness and v_in_witness:
+                                valid_repair_edges.append((u, v))
+                                print(f"[VIZ] Concrete repair edge: ({u}, {v}) [INTERNAL - closes benzene ring]")
+                            else:
+                                valid_repair_edges.append((u, v))
+                                print(f"[VIZ] Concrete repair edge: ({u}, {v}) [EXTERNAL]")
+                        elif not has_edge:
+                            print(f"[VIZ DEBUG]   Edge ({u}, {v}) does NOT exist in clean graph - this is a hypothetical repair")
+                
+                # Case 2: Hypothetical repair (u, -1) or (-1, v)
+                # Find edges in clean graph from u (or to v) that could close the pattern
+                elif u >= 0 and v == -1:
+                    # Strategy: Find neighbors of u in clean graph
+                    # Prefer neighbors that ARE in witness (to close internal patterns like benzene rings)
+                    print(f"[VIZ DEBUG] Processing hypothetical edge ({u}, -1)")
+                    if G.has_node(u):
+                        print(f"[VIZ DEBUG]   Node {u} exists, neighbors: {list(G.neighbors(u))}")
+                        # First try: find neighbors in witness that would close a missing edge
+                        internal_candidates = []
+                        external_candidates = []
+                        
+                        for neighbor in G.neighbors(u):
+                            edge_exists = (u, neighbor) in overlay_edges or (neighbor, u) in overlay_edges
+                            print(f"[VIZ DEBUG]   Checking neighbor {neighbor}: edge_exists={edge_exists}, in_witness={neighbor in witness_node_set}")
+                            if not edge_exists:  # Edge missing in witness
+                                if neighbor in witness_node_set:
+                                    internal_candidates.append(neighbor)
+                                else:
+                                    external_candidates.append(neighbor)
+                        
+                        # Prefer internal edges (closes benzene rings etc.)
+                        if internal_candidates:
+                            neighbor = internal_candidates[0]
+                            valid_repair_edges.append((u, neighbor))
+                            print(f"[VIZ] Hypothetical repair edge from ({u}, -1): ({u}, {neighbor}) [INTERNAL]")
+                        elif external_candidates:
+                            neighbor = external_candidates[0]
+                            valid_repair_edges.append((u, neighbor))
+                            print(f"[VIZ] Hypothetical repair edge from ({u}, -1): ({u}, {neighbor}) [EXTERNAL]")
+                
+                elif u == -1 and v >= 0:
+                    # Strategy: Find neighbors of v in clean graph
+                    # Prefer neighbors that ARE in witness (to close internal patterns)
+                    if G.has_node(v):
+                        # First try: find neighbors in witness that would close a missing edge
+                        internal_candidates = []
+                        external_candidates = []
+                        
+                        for neighbor in G.neighbors(v):
+                            edge_exists = (neighbor, v) in overlay_edges or (v, neighbor) in overlay_edges
+                            if not edge_exists:  # Edge missing in witness
+                                if neighbor in witness_node_set:
+                                    internal_candidates.append(neighbor)
+                                else:
+                                    external_candidates.append(neighbor)
+                        
+                        # Prefer internal edges (closes benzene rings etc.)
+                        if internal_candidates:
+                            neighbor = internal_candidates[0]
+                            valid_repair_edges.append((neighbor, v))
+                            print(f"[VIZ] Hypothetical repair edge from (-1, {v}): ({neighbor}, {v}) [INTERNAL]")
+                        elif external_candidates:
+                            neighbor = external_candidates[0]
+                            valid_repair_edges.append((neighbor, v))
+                            print(f"[VIZ] Hypothetical repair edge from (-1, {v}): ({neighbor}, {v}) [EXTERNAL]")
+        
+        if len(valid_repair_edges) > 0:
+            print(f"[VIZ] Drawing {len(valid_repair_edges)} repair edges in orange")
+            nx.draw_networkx_edges(G,
+                                   pos,
+                                   edgelist=valid_repair_edges,
+                                   width=3.5,
+                                   edge_color="orange",
+                                   alpha=0.95)
 
-    # Add legend for atom types and edge types
-    from matplotlib.patches import Patch
-    from matplotlib.lines import Line2D
-    
-    # Atom type legend
-    legend_elements = [Patch(facecolor=atom_colors[i], edgecolor='black', 
-                             label=atom_names[i]) for i in range(len(atom_names))]
-    
-    # Add separator
-    legend_elements.append(Line2D([0], [0], color='none', label=''))
-    
-    # Edge type legend
-    legend_elements.append(Line2D([0], [0], color='#BBBBBB', linewidth=1.0, 
-                                  label='Original edges'))
-    if len(masked_edges) > 0:
-        legend_elements.append(Line2D([0], [0], color='#4A90E2', linewidth=2.5, 
-                                      linestyle='dashed', alpha=0.8,
-                                      label='Masked out'))
-    legend_elements.append(Line2D([0], [0], color='red', linewidth=3.5, 
-                                  label='Witness'))
-    
-    # Place legend outside the plot area on the right side
-    # Much larger font sizes for better readability in small figures
-    plt.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1.0),
-              framealpha=0.95, fontsize=18, title='Legend', title_fontsize=20, ncol=1, 
-              borderaxespad=0, edgecolor='gray', fancybox=True, 
-              handlelength=2.5, handleheight=1.5)
+    # Legend disabled - use separate legend file (mutag_legend.png)
+    # from matplotlib.patches import Patch
+    # from matplotlib.lines import Line2D
+    # 
+    # # Atom type legend
+    # legend_elements = [Patch(facecolor=atom_colors[i], edgecolor='black', 
+    #                          label=atom_names[i]) for i in range(len(atom_names))]
+    # 
+    # # Add separator
+    # legend_elements.append(Line2D([0], [0], color='none', label=''))
+    # 
+    # # Edge type legend
+    # legend_elements.append(Line2D([0], [0], color='#BBBBBB', linewidth=1.0, 
+    #                               label='Original edges'))
+    # if len(masked_edges) > 0:
+    #     legend_elements.append(Line2D([0], [0], color='#4A90E2', linewidth=2.5, 
+    #                                   linestyle='dashed', alpha=0.8,
+    #                                   label='Masked out'))
+    # legend_elements.append(Line2D([0], [0], color='red', linewidth=3.5, 
+    #                               label='Witness'))
+    # 
+    # # Place legend outside the plot area on the right side
+    # # Much larger font sizes for better readability in small figures
+    # plt.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1.0),
+    #           framealpha=0.95, fontsize=18, title='Legend', title_fontsize=20, ncol=1, 
+    #           borderaxespad=0, edgecolor='gray', fancybox=True, 
+    #           handlelength=2.5, handleheight=1.5)
 
     # Title removed as requested - figure will have no title
     plt.axis("off")
@@ -368,6 +487,7 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
         constraints,
         max_masks=config.get("max_masks", 1),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     _debug_scan_head_matches(masked_graph, constraints, tag="masked")
     masked_graph._clean = base_graph
@@ -539,6 +659,7 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
         constraints,
         max_masks=config.get("max_masks", 1),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     masked_graph = _graph_to_device(masked_graph, device)
 
@@ -611,6 +732,44 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
     # Persist the raw mask for future analysis
     if edge_mask is not None:
         torch.save(edge_mask.detach().cpu(), os.path.join(save_root, f"edge_mask_gnnexplainer_{dataset_idx}.pt"))
+        
+        # Visualize the explanation
+        try:
+            # Use the same layout strategy as ApxChase for consistency
+            clean_graph_for_viz = base_graph.cpu()
+            nx_base = _build_nx_from_pyg(clean_graph_for_viz)
+            
+            # Use Kamada-Kawai layout for better molecular structure visualization
+            try:
+                pos = nx.kamada_kawai_layout(nx_base)
+            except:
+                # Fallback to spring layout with tighter spacing
+                pos = nx.spring_layout(nx_base, seed=42, k=0.5, iterations=50)
+            
+            # Set _nodes_in_full to map witness nodes back to original graph
+            # For GNNExplainer, the subgraph contains ALL nodes from masked_graph
+            # So nodes_in_full is just [0, 1, 2, ..., n-1]
+            num_nodes = int(subgraph.num_nodes if subgraph.num_nodes is not None else subgraph.x.size(0))
+            setattr(subgraph, '_nodes_in_full', torch.arange(num_nodes))
+            
+            # Set empty repair edges for GNNExplainer (it doesn't generate repairs)
+            setattr(subgraph, '_repair_edges', [])
+            
+            # Draw the case study visualization
+            out_path = os.path.join(save_root, f"case_graph_{dataset_idx}_gnnexplainer.png")
+            _draw_overlay_case(
+                masked_graph=masked_graph.cpu(),
+                witness_graph=subgraph.cpu(),
+                pos=pos,
+                out_path=out_path,
+                title="",  # No title as per design
+                clean_graph=clean_graph_for_viz
+            )
+            print(f"[GNNExplainer] Saved visualization to {out_path}")
+        except Exception as e:
+            print(f"[GNNExplainer] Failed to save visualization: {e}")
+            import traceback
+            traceback.print_exc()
 
     return elapsed, 1, fidelity_minus, conciseness, coverage_ratio  # treat one explanation per graph
 
@@ -624,6 +783,7 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
         constraints,
         max_masks=config.get("max_masks", 1),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     masked_graph = _graph_to_device(masked_graph, device)
 
@@ -727,6 +887,53 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
     if edge_mask is not None:
         torch.save(edge_mask.detach().cpu(), os.path.join(save_root, f"edge_mask_pgexplainer_{dataset_idx}.pt"))
 
+    # 添加可视化：为PGExplainer生成子图图像
+    if edge_mask is not None and config.get("visualize", True):
+        try:
+            # 使用与GNNExplainer相同的可视化流程
+            k = config.get("pgexplainer_topk", 10)
+            edge_mask_flat = edge_mask.flatten()
+            topk_indices = torch.topk(edge_mask_flat, min(k, len(edge_mask_flat))).indices
+            
+            # 构建包含top-k边的子图
+            selected_edges = masked_graph.edge_index[:, topk_indices]
+            witness_graph = Data(
+                x=masked_graph.x.clone(),
+                edge_index=selected_edges,
+                batch=masked_graph.batch.clone() if hasattr(masked_graph, 'batch') else None
+            )
+            
+            # 添加节点映射和repair edges（PGExplainer不生成repairs）
+            num_nodes = int(masked_graph.x.size(0))
+            witness_graph._nodes_in_full = torch.arange(num_nodes)
+            witness_graph._repair_edges = []
+            
+            # 使用与GNNExplainer相同的布局策略
+            clean_graph_for_viz = base_graph.cpu()
+            nx_base = _build_nx_from_pyg(clean_graph_for_viz)
+            
+            # 使用Kamada-Kawai布局（与ApxChase一致）
+            try:
+                pos = nx.kamada_kawai_layout(nx_base)
+            except:
+                pos = nx.spring_layout(nx_base, seed=42, k=0.5, iterations=50)
+            
+            # 保存可视化
+            out_path = os.path.join(save_root, f"case_graph_{dataset_idx}_pgexplainer.png")
+            _draw_overlay_case(
+                masked_graph=masked_graph.cpu(),
+                witness_graph=witness_graph.cpu(),
+                pos=pos,
+                out_path=out_path,
+                title="",  # No title as per design
+                clean_graph=clean_graph_for_viz
+            )
+            print(f"[PGExplainer] Saved visualization to {out_path}")
+        except Exception as e:
+            print(f"[PGExplainer] Failed to save visualization: {e}")
+            import traceback
+            traceback.print_exc()
+
     return elapsed, 1, fidelity_minus, conciseness, coverage_ratio
 
 
@@ -747,6 +954,7 @@ def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], data
         constraints,
         max_masks=config.get("max_masks", 1),
         seed=config.get("random_seed"),
+        preserve_connectivity=config.get("preserve_connectivity", True),
     )
     if verbose:
         _debug_scan_head_matches(masked_graph, constraints, tag="masked")

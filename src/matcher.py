@@ -1,5 +1,6 @@
 
 from typing import Dict, List, Tuple, Any, Set, Iterable, Optional
+import os
 
 # 说明：
 #  - 本文件提供约束(TGD)匹配与“回追(backchase)”的最小实现。
@@ -159,7 +160,7 @@ def _neighbors_of_label(G: nx.Graph, u: int, allowed: Set[int]) -> List[int]:
     return out
 
 
-def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int], B: int) -> Tuple[bool, int, List[Tuple[int, int]]]:
+def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int], B: int, witness_nodes: Optional[Set[int]] = None) -> Tuple[bool, int, List[Tuple[int, int]]]:
     """
     给定一个 head 匹配 binding，估计实现 body 所需的(最小)“缺边数”。
     返回：(是否在预算内, 估计代价rep, 需要插入的边列表 repairs)
@@ -186,29 +187,61 @@ def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int],
     allowed_map: Dict[str, Set[int]] = {
         var: set(cond.get('in', [])) for var, cond in spec_nodes.items()
     }
+    
+    # 获取distinct约束
+    distinct_vars = body.get('distinct', [])
+    
+    # Debug: print witness_nodes if provided
+    debug_witness = os.environ.get('DEBUG_MATCHER', '') == '1'
+    if debug_witness and witness_nodes is not None:
+        print(f"[MATCHER DEBUG] witness_nodes={sorted(witness_nodes)}, initial_binding={binding}, distinct_vars={distinct_vars}")
 
     for u_var, v_var in body_edges:
         u_bound = u_var in env
         v_bound = v_var in env
+        
+        if debug_witness:
+            print(f"[MATCHER DEBUG] Processing BODY edge ({u_var}, {v_var}): u_bound={u_bound}, v_bound={v_bound}, env={env}")
 
         if u_bound and v_bound:
             u_id, v_id = env[u_var], env[v_var]
             if not _edge_exists(G, u_id, v_id):
                 rep += 1
                 repairs.append((u_id, v_id))
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → Edge ({u_id}, {v_id}) MISSING, rep+1={rep}")
                 if rep > B:
                     return (False, rep, repairs)
+            else:
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → Edge ({u_id}, {v_id}) EXISTS")
             continue
 
         if u_bound and not v_bound:
             u_id = env[u_var]
             cand = _neighbors_of_label(G, u_id, allowed_map.get(v_var, set()))
+            if debug_witness:
+                print(f"[MATCHER DEBUG]   → u={u_id} bound, finding v: all_candidates={cand}")
+            if witness_nodes is not None:
+                cand = [n for n in cand if n in witness_nodes]
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → After filtering by witness_nodes: cand={cand}")
+            # 检查distinct约束
+            if distinct_vars and v_var in distinct_vars:
+                already_bound = set(env[dv] for dv in distinct_vars if dv in env and dv != v_var)
+                cand = [n for n in cand if n not in already_bound]
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → After filtering by distinct constraint: cand={cand}, already_bound={already_bound}")
             if cand:
                 env[v_var] = cand[0]  # 任取一个
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → Bound {v_var}={cand[0]}")
             else:
                 # 无合适邻居，视作需要插入 (u_id, new_v)
                 rep += 1
                 repairs.append((u_id, -1))  # -1 表示需要新接入/未知节点
+                if debug_witness:
+                    print(f"[MATCHER DEBUG]   → No candidate found, rep+1={rep}")
                 if rep > B:
                     return (False, rep, repairs)
             continue
@@ -216,6 +249,12 @@ def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int],
         if not u_bound and v_bound:
             v_id = env[v_var]
             cand = _neighbors_of_label(G, v_id, allowed_map.get(u_var, set()))
+            if witness_nodes is not None:
+                cand = [n for n in cand if n in witness_nodes]
+            # 检查distinct约束
+            if distinct_vars and u_var in distinct_vars:
+                already_bound = set(env[dv] for dv in distinct_vars if dv in env and dv != u_var)
+                cand = [n for n in cand if n not in already_bound]
             if cand:
                 env[u_var] = cand[0]
             else:
@@ -228,8 +267,18 @@ def backchase_repair_cost(Gs: Any, tgd: Dict[str, Any], binding: Dict[str, int],
         # 两端都未绑定：尝试在图里找一条满足标签的现有边
         set_u = allowed_map.get(u_var, set())
         set_v = allowed_map.get(v_var, set())
+        # 获取已绑定的节点(用于distinct检查)
+        already_bound = set()
+        if distinct_vars:
+            if u_var in distinct_vars or v_var in distinct_vars:
+                already_bound = set(env[dv] for dv in distinct_vars if dv in env)
         found_pair: Optional[Tuple[int, int]] = None
         for a, b in G.edges():
+            if witness_nodes is not None and (a not in witness_nodes or b not in witness_nodes):
+                continue
+            # 检查distinct约束
+            if already_bound and (a in already_bound or b in already_bound):
+                continue
             la = G.nodes[a].get('label', None)
             lb = G.nodes[b].get('label', None)
             if la in set_u and lb in set_v:

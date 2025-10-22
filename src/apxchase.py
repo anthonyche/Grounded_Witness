@@ -294,8 +294,10 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     root_val = getattr(H, 'root', None)
     task_type = getattr(H, 'task', None)
     y_ref = getattr(H, 'y_ref', None)
-    is_node_task = (root_val is not None and root_val >= 0) or \
-                   (task_type == 'node') or \
+    # FIX: For node task, we should ALWAYS index y/y_ref/y_type by selected nodes
+    # Task type should be inherited from H (the full L-hop graph), not inferred
+    is_node_task = (task_type == 'node') or \
+                   (root_val is not None and root_val >= 0) or \
                    (y_ref is not None and y_ref.numel() > 1 and y_ref.size(0) == H.num_nodes)
     
     if hasattr(H, 'y_ref') and H.y_ref is not None:
@@ -307,8 +309,13 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     if hasattr(H, 'y') and H.y is not None:
         if is_node_task:
             data.y = H.y[nodes]  # Node classification: index by nodes
+            # DEBUG: Check if labels are extracted correctly
+            print(f"[_induce_subgraph DEBUG] H.y exists, is_node_task={is_node_task}, H.num_nodes={H_num_nodes}")
+            print(f"[_induce_subgraph DEBUG] nodes: {nodes[:min(5, len(nodes))].tolist()}")
+            print(f"[_induce_subgraph DEBUG] H.y[nodes]: {H.y[nodes][:min(5, len(nodes))].tolist() if len(nodes) > 0 else 'empty'}")
         else:
             data.y = H.y  # Graph classification: keep as-is
+            print(f"[_induce_subgraph DEBUG] H.y exists, is_node_task={is_node_task} (graph task)")
     
     if hasattr(H, 'y_type') and H.y_type is not None:
         if is_node_task:
@@ -544,6 +551,14 @@ class ApxChase:
         if not hasattr(H, 'num_nodes'):
             H.num_nodes = H.x.size(0) if H.x is not None else 0
         self._H_clean = getattr(data, '_clean', data)
+        # DEBUG: Check H.y distribution
+        if hasattr(H, 'y') and H.y is not None:
+            y_counts = {}
+            for lbl in H.y.tolist():
+                y_counts[lbl] = y_counts.get(lbl, 0) + 1
+            print(f"[explain_node DEBUG] H.y distribution: {y_counts}")
+        else:
+            print(f"[explain_node DEBUG] H has no y attribute!")
         self._log(f"Start explain_node: v_t={v_t}, |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
             self._log("Debugging mode — head-only diagnostics may be skipped.")
@@ -610,6 +625,15 @@ class ApxChase:
         H_view = Gs
         if self.debug:
             self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
+            # DEBUG: Check node label distribution in candidate
+            if hasattr(H_view, 'y') and H_view.y is not None:
+                labels_in_view = H_view.y.tolist() if H_view.y.numel() <= 20 else H_view.y[:20].tolist()
+                label_counts = {}
+                for lbl in H_view.y.tolist():
+                    label_counts[lbl] = label_counts.get(lbl, 0) + 1
+                self._log(f"Candidate labels: {label_counts} (first 20: {labels_in_view})")
+            else:
+                self._log(f"WARNING: Candidate has no y attribute!")
         # Detailed debug: per-constraint head-only match counts on this candidate view
         if self.debug:
             if find_head_matches is None:

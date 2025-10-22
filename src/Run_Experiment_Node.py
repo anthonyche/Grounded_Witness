@@ -80,6 +80,7 @@ def _run_one_node_apxchase(
         constraints,
         num_hops=config.get("L", 2),
         max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),  # Use ratio if specified
         seed=config.get("random_seed"),
     )
     
@@ -332,8 +333,11 @@ def main() -> None:
     dataset_resource = dataset_func(config)
     if isinstance(dataset_resource, dict):
         data = dataset_resource['data']
+        # Extract sampled target nodes from dataset_resource (BAShape, Yelp, etc.)
+        sampled_targets = dataset_resource.get('target_nodes', [])
     else:
         data = dataset_resource
+        sampled_targets = []
     
     # Load model and constraints
     model = _load_trained_model(config, device)
@@ -354,8 +358,8 @@ def main() -> None:
         debug=True,
     )
     
-    # Determine target nodes
-    target_nodes_config = config.get("target_nodes", [])
+    # Determine target nodes: prioritize dataset-sampled targets over config
+    target_nodes_config = sampled_targets if sampled_targets else config.get("target_nodes", [])
     if args.run_all:
         target_nodes = target_nodes_config
     else:
