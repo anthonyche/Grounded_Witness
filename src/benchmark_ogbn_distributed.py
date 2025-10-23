@@ -29,8 +29,8 @@ from ogb.nodeproppred import PygNodePropPredDataset
 # Import your explainer implementations
 import sys
 sys.path.append('src')
-# Don't use "from model import *" - it triggers model.py's if __name__ == '__main__'
-from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
+# Don't import model classes at top level - they trigger __main__ in multiprocessing
+# from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN  # Moved to function scope
 from heuchase import HeuChase
 from apxchase import ApxChase
 from baselines import run_gnn_explainer_node
@@ -122,8 +122,28 @@ class Coordinator:
             traceback.print_exc()
             raise
     
-    def create_tasks(self, node_ids):
-        """为所有节点创建任务"""
+    def create_tasks(self, node_ids, cache_dir='cache/subgraphs'):
+        """为所有节点创建任务（支持缓存）"""
+        # Generate cache filename based on node_ids and num_hops
+        node_ids_hash = hash(tuple(sorted(node_ids)))
+        cache_file = f"{cache_dir}/subgraphs_hops{self.num_hops}_nodes{len(node_ids)}_hash{abs(node_ids_hash)}.pt"
+        
+        # Try to load from cache
+        if os.path.exists(cache_file):
+            print(f"Coordinator: Loading cached subgraphs from {cache_file}")
+            try:
+                cached_data = torch.load(cache_file)
+                tasks = cached_data['tasks']
+                print(f"Coordinator: Loaded {len(tasks)} cached tasks")
+                print(f"  Subgraph sizes (edges): min={min(t.num_edges for t in tasks)}, "
+                      f"max={max(t.num_edges for t in tasks)}, "
+                      f"mean={np.mean([t.num_edges for t in tasks]):.1f}")
+                return tasks
+            except Exception as e:
+                print(f"Warning: Failed to load cache: {e}")
+                print("  Will extract subgraphs from scratch...")
+        
+        # Extract subgraphs from scratch
         tasks = []
         print(f"Coordinator: Extracting {len(node_ids)} subgraphs...")
         
@@ -133,7 +153,7 @@ class Coordinator:
             except Exception as e:
                 print(f"\nFailed to extract subgraph for node {node_id} (task {i})")
                 raise
-            subgraph, num_edges = self.extract_subgraph(node_id)
+            
             task = SubgraphTask(
                 task_id=i,
                 node_id=node_id,
@@ -146,6 +166,29 @@ class Coordinator:
         print(f"  Subgraph sizes (edges): min={min(t.num_edges for t in tasks)}, "
               f"max={max(t.num_edges for t in tasks)}, "
               f"mean={np.mean([t.num_edges for t in tasks]):.1f}")
+        
+        # Save to cache
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_data = {
+                'tasks': tasks,
+                'node_ids': node_ids,
+                'num_hops': self.num_hops,
+                'metadata': {
+                    'num_tasks': len(tasks),
+                    'timestamp': time.time(),
+                }
+            }
+            torch.save(cache_data, cache_file)
+            print(f"Coordinator: Cached subgraphs to {cache_file}")
+            
+            # Print cache file size
+            cache_size_mb = os.path.getsize(cache_file) / 1024**2
+            print(f"  Cache file size: {cache_size_mb:.2f} MB")
+            
+        except Exception as e:
+            print(f"Warning: Failed to save cache: {e}")
+            print("  Continuing without caching...")
         
         return tasks
     
@@ -176,6 +219,9 @@ class Coordinator:
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue):
     """Worker 进程：运行解释算法"""
     try:
+        # Import model class inside worker to avoid triggering __main__ during spawn
+        from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
+        
         # Load model
         model = GCN_2_OGBN(
             input_dim=128,
@@ -308,9 +354,10 @@ def run_distributed_benchmark(
     num_workers,
     explainer_config=None,
     num_hops=2,
-    device='cpu'
+    device='cpu',
+    cache_dir='cache/subgraphs'
 ):
-    """运行分布式基准测试"""
+    """运行分布式基准测试（支持子图缓存）"""
     
     if explainer_config is None:
         explainer_config = {}
@@ -325,6 +372,9 @@ def run_distributed_benchmark(
     print("="*70)
     
     try:
+        # Import model class inside function to avoid triggering __main__ during spawn
+        from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
+        
         # Load model
         print("Loading model...")
         checkpoint = torch.load(model_path, map_location='cpu')
@@ -360,7 +410,7 @@ def run_distributed_benchmark(
     
     try:
         start_time = time.time()
-        tasks = coordinator.create_tasks(node_ids)
+        tasks = coordinator.create_tasks(node_ids, cache_dir=cache_dir)
         extraction_time = time.time() - start_time
         
         # Print memory after subgraph extraction
@@ -368,7 +418,7 @@ def run_distributed_benchmark(
         print(f"  Memory after subgraph extraction: {mem_after:.2f} GB (+{mem_after - mem_before:.2f} GB)")
         
     except Exception as e:
-        print(f"ERROR creating tasks (extracting subgraphs): {e}")
+        print(f"ERROR creating tasks (extracting/loading subgraphs): {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -606,6 +656,10 @@ def main():
     # Run benchmarks
     all_results = []
     
+    # Cache directory for subgraphs (shared across all benchmarks)
+    CACHE_DIR = 'cache/subgraphs'
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    
     for explainer_name in EXPLAINERS:
         for num_workers in NUM_WORKERS_LIST:
             print(f"\n{'='*70}")
@@ -620,7 +674,8 @@ def main():
                 num_workers=num_workers,
                 explainer_config=EXPLAINER_CONFIGS[explainer_name],
                 num_hops=NUM_HOPS,
-                device=DEVICE
+                device=DEVICE,
+                cache_dir=CACHE_DIR  # Use shared cache
             )
             
             all_results.append(result)

@@ -26,19 +26,8 @@ import argparse
 import yaml
 from tqdm import tqdm
 
-print("=" * 70)
-print("OGBN-PAPERS100M - GCN TRAINING (2-layer, Mini-batch)")
-print("=" * 70)
-
-# Check device
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Device: {device}")
-if torch.cuda.is_available():
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA version: {torch.version.cuda}")
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-print("=" * 70)
+# Don't print at import time - it breaks multiprocessing
+# These prints moved to main() function
 print()
 
 # ============================================================================
@@ -204,6 +193,22 @@ def main():
                         help='Directory to save model')
     
     args = parser.parse_args()
+    
+    # Print header (moved from top-level to avoid multiprocessing issues)
+    print("=" * 70)
+    print("OGBN-PAPERS100M - GCN TRAINING (2-layer, Mini-batch)")
+    print("=" * 70)
+    
+    # Check device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {device}")
+    if torch.cuda.is_available():
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    print("=" * 70)
+    print()
     
     # Get parameters
     epochs = args.epochs
