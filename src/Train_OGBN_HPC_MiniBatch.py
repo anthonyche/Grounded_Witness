@@ -89,7 +89,9 @@ def train_epoch(model, train_loader, optimizer, device):
         
         # Forward pass on batch
         out = model(batch.x, batch.edge_index)[:batch.batch_size]
-        loss = F.nll_loss(out, batch.y[:batch.batch_size].squeeze(1))
+        # Convert labels to Long type (nll_loss requires Long)
+        labels = batch.y[:batch.batch_size].squeeze(1).long()
+        loss = F.nll_loss(out, labels)
         
         loss.backward()
         optimizer.step()
@@ -100,7 +102,7 @@ def train_epoch(model, train_loader, optimizer, device):
         pbar.set_postfix({'loss': loss.item()})
         
         # Aggressive memory cleanup每个 batch
-        del batch, out, loss
+        del batch, out, loss, labels
         
         # 每 5 个 batch 强制清理
         if batch_idx % 5 == 0:
@@ -139,6 +141,10 @@ def evaluate(model, loader, evaluator, device, desc='Evaluating'):
     
     y_true = torch.cat(y_true_list, dim=0)
     y_pred = torch.cat(y_pred_list, dim=0)
+    
+    # Ensure correct types for evaluator
+    y_true = y_true.long()
+    y_pred = y_pred.long()
     
     acc = evaluator.eval({
         'y_true': y_true,
