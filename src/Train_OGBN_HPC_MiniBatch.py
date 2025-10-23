@@ -69,6 +69,13 @@ def clear_gpu_memory():
         torch.cuda.empty_cache()
         gc.collect()
 
+def clear_all_memory():
+    """Aggressive memory clearing (GPU + CPU)"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
 def train_epoch(model, train_loader, optimizer, device):
     """Train for one epoch using mini-batches"""
     model.train()
@@ -76,7 +83,7 @@ def train_epoch(model, train_loader, optimizer, device):
     total_samples = 0
     
     pbar = tqdm(train_loader, desc='Training')
-    for batch in pbar:
+    for batch_idx, batch in enumerate(pbar):
         batch = batch.to(device)
         optimizer.zero_grad()
         
@@ -92,10 +99,15 @@ def train_epoch(model, train_loader, optimizer, device):
         
         pbar.set_postfix({'loss': loss.item()})
         
-        # Clear cache periodically
+        # Aggressive memory cleanup每个 batch
         del batch, out, loss
-        if total_samples % 10000 == 0:
-            clear_gpu_memory()
+        
+        # 每 5 个 batch 强制清理
+        if batch_idx % 5 == 0:
+            clear_all_memory()
+    
+    # Epoch 结束后完全清理
+    clear_all_memory()
     
     return total_loss / total_samples
 
@@ -108,7 +120,7 @@ def evaluate(model, loader, evaluator, device, desc='Evaluating'):
     y_pred_list = []
     
     pbar = tqdm(loader, desc=desc)
-    for batch in pbar:
+    for batch_idx, batch in enumerate(pbar):
         batch = batch.to(device)
         
         # Forward pass on batch
@@ -118,9 +130,12 @@ def evaluate(model, loader, evaluator, device, desc='Evaluating'):
         y_true_list.append(batch.y[:batch.batch_size].cpu())
         y_pred_list.append(y_pred.cpu())
         
-        # Clear cache
+        # Aggressive memory cleanup
         del batch, out, y_pred
-        clear_gpu_memory()
+        
+        # 每 10 个 batch 强制清理
+        if batch_idx % 10 == 0:
+            clear_all_memory()
     
     y_true = torch.cat(y_true_list, dim=0)
     y_pred = torch.cat(y_pred_list, dim=0)
@@ -129,6 +144,12 @@ def evaluate(model, loader, evaluator, device, desc='Evaluating'):
         'y_true': y_true,
         'y_pred': y_pred,
     })['acc']
+    
+    # 清理临时列表
+    del y_true_list, y_pred_list, y_true, y_pred
+    clear_all_memory()
+    
+    return acc
     
     return acc
 
@@ -193,11 +214,15 @@ def main():
     # Load dataset
     print("Loading ogbn-papers100M dataset...")
     print("WARNING: This is a large dataset (~60GB). Loading may take several minutes.")
+    print("MEMORY OPTIMIZATION: Using minimal configuration for 128GB RAM")
     start_time = time.time()
     
     dataset = PygNodePropPredDataset(name='ogbn-papers100M', root=args.data_root)
     data = dataset[0]
     split_idx = dataset.get_idx_split()
+    
+    # 立即清理内存
+    clear_all_memory()
     
     load_time = time.time() - start_time
     print(f"Dataset loaded in {load_time/60:.2f} minutes")

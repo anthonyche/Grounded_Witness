@@ -2,11 +2,11 @@
 #SBATCH --job-name=ogbn_papers100m_gcn
 #SBATCH --output=logs/ogbn_papers100m_%j.out
 #SBATCH --error=logs/ogbn_papers100m_%j.err
-#SBATCH --time=12:00:00              # 48 hours (large dataset)
+#SBATCH --time=24:00:00              # 24 hours (extreme optimization = slower)
 #SBATCH --partition=gpu              # GPU partition
 #SBATCH --gres=gpu:1                 # Request 1 GPU
 #SBATCH --cpus-per-task=8            # 8 CPU cores
-#SBATCH --mem=256G                   # 256GB RAM (dataset 60GB + DataLoader workers 4x50GB = 256GB)
+#SBATCH --mem=128G                   # 128GB RAM (extreme memory optimization)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -82,15 +82,15 @@ echo "  OMP_NUM_THREADS: $OMP_NUM_THREADS"
 echo "  PYTORCH_CUDA_ALLOC_CONF: $PYTORCH_CUDA_ALLOC_CONF"
 echo ""
 
-# Training configuration
+# Training configuration (极致内存优化 - 适配 128GB RAM)
 EPOCHS=100
 LR=0.01
-HIDDEN_DIM=256
+HIDDEN_DIM=16            # Minimal hidden dim (降低模型内存)
 DROPOUT=0.5
 WEIGHT_DECAY=0.0
-BATCH_SIZE=512           # Reduced batch size (was 1024) to save RAM
-NUM_NEIGHBORS="10 5"     # Reduced neighbor sampling (was "15 10") to save RAM
-NUM_WORKERS=0            # Data loader workers (0 = main process, saves RAM)
+BATCH_SIZE=256           # 进一步减小 batch (256 vs 512)
+NUM_NEIGHBORS="5 3"      # 最小邻居采样 (5,3 vs 10,5) - 关键优化！
+NUM_WORKERS=0            # 必须为 0（主进程加载）
 LOG_STEPS=1
 
 echo "=================================================="
