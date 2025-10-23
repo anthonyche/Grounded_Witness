@@ -150,8 +150,20 @@ def evaluate(model, loader, evaluator, device, desc='Evaluating'):
     clear_all_memory()
     
     return acc
-    
-    return acc
+
+def create_eval_loader(data, split_idx, split_name, num_neighbors, batch_size, num_workers):
+    """动态创建评估 loader（节省内存）"""
+    print(f"Creating {split_name} loader...")
+    loader = NeighborLoader(
+        data,
+        num_neighbors=num_neighbors,
+        batch_size=batch_size,
+        input_nodes=split_idx[split_name],
+        num_workers=num_workers,
+        persistent_workers=False,
+        shuffle=False,
+    )
+    return loader
 
 # ============================================================================
 # Main Training Function
@@ -240,10 +252,13 @@ def main():
     print()
     
     # Create mini-batch loaders (data stays on CPU)
+    # 策略：只创建 train_loader，val/test_loader 延迟创建以节省内存
     print("Creating mini-batch data loaders...")
     print(f"  Using NeighborLoader with sampling: {num_neighbors}")
     print(f"  Batch size: {batch_size}")
+    print(f"  MEMORY OPTIMIZATION: Creating loaders one at a time")
     
+    # 只创建 train_loader
     train_loader = NeighborLoader(
         data,
         num_neighbors=num_neighbors,
@@ -254,27 +269,14 @@ def main():
         shuffle=True,
     )
     
-    val_loader = NeighborLoader(
-        data,
-        num_neighbors=num_neighbors,
-        batch_size=batch_size,
-        input_nodes=split_idx['valid'],
-        num_workers=num_workers,
-        persistent_workers=False,  # Don't cache data in workers (saves RAM)
-        shuffle=False,
-    )
+    print("Train loader created successfully!")
+    print(f"  Train batches: {len(train_loader)}")
     
-    test_loader = NeighborLoader(
-        data,
-        num_neighbors=num_neighbors,
-        batch_size=batch_size,
-        input_nodes=split_idx['test'],
-        num_workers=num_workers,
-        persistent_workers=False,  # Don't cache data in workers (saves RAM)
-        shuffle=False,
-    )
+    # 立即清理内存
+    clear_all_memory()
     
-    print("Data loaders created successfully!")
+    # val_loader 和 test_loader 将在需要时动态创建
+    print("Validation and test loaders will be created on-demand to save memory")
     print()
     
     if torch.cuda.is_available():
@@ -323,9 +325,21 @@ def main():
         # Evaluate
         if epoch % log_steps == 0 or epoch == 1:
             print(f"\nEpoch {epoch:03d} evaluation:")
+            
+            # 动态创建评估 loaders（节省内存）
             train_acc = evaluate(model, train_loader, evaluator, device, desc='Train eval')
+            
+            # 创建 val_loader，评估后立即删除
+            val_loader = create_eval_loader(data, split_idx, 'valid', num_neighbors, batch_size, num_workers)
             valid_acc = evaluate(model, val_loader, evaluator, device, desc='Val eval')
+            del val_loader
+            clear_all_memory()
+            
+            # 创建 test_loader，评估后立即删除
+            test_loader = create_eval_loader(data, split_idx, 'test', num_neighbors, batch_size, num_workers)
             test_acc = evaluate(model, test_loader, evaluator, device, desc='Test eval')
+            del test_loader
+            clear_all_memory()
             
             print(f"Epoch {epoch:03d} | "
                   f"Loss: {train_loss:.4f} | "
@@ -376,9 +390,19 @@ def main():
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
         print("\nFinal evaluation with best model:")
+        
+        # 动态创建评估 loaders
         train_acc = evaluate(model, train_loader, evaluator, device, desc='Final train')
+        
+        val_loader = create_eval_loader(data, split_idx, 'valid', num_neighbors, batch_size, num_workers)
         valid_acc = evaluate(model, val_loader, evaluator, device, desc='Final val')
+        del val_loader
+        clear_all_memory()
+        
+        test_loader = create_eval_loader(data, split_idx, 'test', num_neighbors, batch_size, num_workers)
         test_acc = evaluate(model, test_loader, evaluator, device, desc='Final test')
+        del test_loader
+        clear_all_memory()
         
         print(f"\nBest epoch: {best_epoch}")
         print(f"Best validation accuracy: {valid_acc:.4f}")

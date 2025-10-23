@@ -88,8 +88,8 @@ LR=0.01
 HIDDEN_DIM=16            # Minimal hidden dim (降低模型内存)
 DROPOUT=0.5
 WEIGHT_DECAY=0.0
-BATCH_SIZE=256           # 进一步减小 batch (256 vs 512)
-NUM_NEIGHBORS="5 3"      # 最小邻居采样 (5,3 vs 10,5) - 关键优化！
+BATCH_SIZE=128           # 最小 batch (128 vs 256) - 关键！
+NUM_NEIGHBORS="3 2"      # 最小邻居采样 (3,2 vs 5,3) - 关键！
 NUM_WORKERS=0            # 必须为 0（主进程加载）
 LOG_STEPS=1
 
