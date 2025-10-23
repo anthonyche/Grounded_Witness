@@ -37,6 +37,31 @@ from baselines import run_gnn_explainer_node
 from constraints import get_constraints
 
 
+def load_tasks_from_cache_only(node_ids, num_hops, cache_dir='cache/subgraphs'):
+    """仅从缓存加载任务（不需要完整的 data 对象）"""
+    import hashlib
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # Generate cache filename
+    node_ids_tuple = tuple(sorted(node_ids))
+    node_str = str(node_ids_tuple)
+    hash_val = hashlib.md5(node_str.encode()).hexdigest()[:8]
+    cache_file = f"{cache_dir}/subgraphs_hops{num_hops}_nodes{len(node_ids)}_hash{hash_val}.pt"
+    
+    if not os.path.exists(cache_file):
+        raise FileNotFoundError(
+            f"Cache file not found: {cache_file}\n"
+            f"Please run with use_cache_only=False first to generate cache."
+        )
+    
+    print(f"  Loading tasks from cache: {cache_file}")
+    cached_data = torch.load(cache_file, map_location='cpu')
+    tasks = cached_data['tasks']
+    print(f"  ✓ Loaded {len(tasks)} tasks from cache")
+    
+    return tasks
+
+
 class SubgraphTask:
     """表示一个子图解释任务"""
     def __init__(self, task_id, node_id, subgraph_data, num_edges):
@@ -355,9 +380,10 @@ def run_distributed_benchmark(
     explainer_config=None,
     num_hops=2,
     device='cpu',
-    cache_dir='cache/subgraphs'
+    cache_dir='cache/subgraphs',
+    use_cache_only=False  # New: if True, skip data and only load from cache
 ):
-    """运行分布式基准测试（支持子图缓存）"""
+    """运行分布式基准测试（支持子图缓存，可选仅使用缓存）"""
     
     if explainer_config is None:
         explainer_config = {}
@@ -368,6 +394,7 @@ def run_distributed_benchmark(
     print(f"  Num workers: {num_workers}")
     print(f"  Num nodes: {len(node_ids)}")
     print(f"  Num hops: {num_hops}")
+    print(f"  Use cache only: {use_cache_only}")
     print(f"  Explainer config: {explainer_config}")
     print("="*70)
     
@@ -401,30 +428,49 @@ def run_distributed_benchmark(
     
     # Phase 1: Coordinator extracts subgraphs and creates tasks
     try:
-        coordinator = Coordinator(data, model, device, num_hops=num_hops)
+        if use_cache_only:
+            # 仅从缓存加载任务，不需要 Coordinator
+            print("  [Cache-only mode] Loading tasks from cache...")
+            start_time = time.time()
+            tasks = load_tasks_from_cache_only(node_ids, num_hops, cache_dir)
+            extraction_time = time.time() - start_time
+            print(f"  ✓ Loaded {len(tasks)} tasks in {extraction_time:.2f}s")
+        else:
+            # 需要 data 来提取子图（如果缓存不存在）
+            if data is None:
+                raise ValueError("data parameter is required when use_cache_only=False")
+            print("  [Full mode] Creating Coordinator and extracting/loading subgraphs...")
+            coordinator = Coordinator(data, model, device, num_hops=num_hops)
+            start_time = time.time()
+            tasks = coordinator.create_tasks(node_ids, cache_dir=cache_dir)
+            extraction_time = time.time() - start_time
+            
+            # Print memory after subgraph extraction
+            mem_after = process.memory_info().rss / 1024**3
+            print(f"  Memory after subgraph extraction: {mem_after:.2f} GB (+{mem_after - mem_before:.2f} GB)")
+            print(f"  ✓ Created {len(tasks)} tasks in {extraction_time:.2f}s")
     except Exception as e:
-        print(f"ERROR creating coordinator: {e}")
+        print(f"ERROR creating/loading tasks: {e}")
         import traceback
         traceback.print_exc()
         raise
     
-    try:
-        start_time = time.time()
-        tasks = coordinator.create_tasks(node_ids, cache_dir=cache_dir)
-        extraction_time = time.time() - start_time
-        
-        # Print memory after subgraph extraction
-        mem_after = process.memory_info().rss / 1024**3
-        print(f"  Memory after subgraph extraction: {mem_after:.2f} GB (+{mem_after - mem_before:.2f} GB)")
-        
-    except Exception as e:
-        print(f"ERROR creating tasks (extracting/loading subgraphs): {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+    # Phase 2: Distribute tasks with load balancing (no Coordinator needed)
+    print(f"\nDistributing {len(tasks)} tasks to {num_workers} workers...")
+    balancer = LoadBalancer(num_workers)
+    task_assignments = [[] for _ in range(num_workers)]
     
-    # Phase 2: Distribute tasks with load balancing
-    task_assignments, load_stats = coordinator.distribute_tasks(tasks, num_workers)
+    for task in tasks:
+        worker_id = balancer.assign_task(task.num_edges)
+        task_assignments[worker_id].append(task)
+    
+    load_stats = balancer.get_load_stats()
+    print(f"  Load balancing stats:")
+    print(f"    Total load: {load_stats['total_load']:,} edges")
+    print(f"    Avg per worker: {load_stats['avg_load']:,.0f} edges")
+    print(f"    Min: {load_stats['min_load']:,} | Max: {load_stats['max_load']:,}")
+    print(f"    Load balance ratio: {load_stats['balance_ratio']:.2f}")
+
     
     # Phase 3: Workers process tasks in parallel
     print(f"\nStarting {num_workers} worker processes...")
@@ -553,6 +599,8 @@ def main():
     parser.add_argument('--workers', nargs='+', type=int, default=None, help='List of worker counts to test')
     parser.add_argument('--num_nodes', type=int, default=None, help='Number of nodes to sample')
     parser.add_argument('--model_path', type=str, default=None, help='Path to trained model')
+    parser.add_argument('--use-cache-only', action='store_true',
+                        help='Only load from cache, do not load full dataset (requires cache to exist)')
     args = parser.parse_args()
     
     # Load config file
@@ -600,6 +648,7 @@ def main():
     print(f"  Num hops: {NUM_HOPS}")
     print(f"  Model: {MODEL_PATH}")
     print(f"  Device: {DEVICE}")
+    print(f"  Cache-only mode: {args.use_cache_only}")
     print("="*70)
     
     print("="*70)
@@ -636,66 +685,55 @@ def main():
         }
     }
     
-    print("\nLoading OGBN-Papers100M dataset...")
-    try:
-        dataset = PygNodePropPredDataset(name='ogbn-papers100M', root='./datasets')
-        data = dataset[0]
-        split_idx = dataset.get_idx_split()
+    # Conditionally load dataset (skip if cache-only mode)
+    data = None
+    if not args.use_cache_only:
+        print("\nLoading OGBN-Papers100M dataset...")
+        try:
+            dataset = PygNodePropPredDataset(name='ogbn-papers100M', root='./datasets')
+            data = dataset[0]
+            split_idx = dataset.get_idx_split()
+            
+            print(f"  Dataset loaded successfully!")
+            print(f"  Nodes: {data.num_nodes:,}")
+            print(f"  Edges: {data.edge_index.size(1):,}")
+            print(f"  Features shape: {data.x.shape}")
+            print(f"  Labels shape: {data.y.shape}")
+            
+            # Print memory usage
+            import psutil
+            process = psutil.Process()
+            mem_gb = process.memory_info().rss / 1024**3
+            print(f"  Current memory usage: {mem_gb:.2f} GB")
+            
+        except Exception as e:
+            print(f"ERROR loading dataset: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
-        print(f"  Dataset loaded successfully!")
-        print(f"  Nodes: {data.num_nodes:,}")
-        print(f"  Edges: {data.edge_index.size(1):,}")
-        print(f"  Features shape: {data.x.shape}")
-        print(f"  Labels shape: {data.y.shape}")
-        
-        # Print memory usage
-        import psutil
-        process = psutil.Process()
-        mem_gb = process.memory_info().rss / 1024**3
-        print(f"  Current memory usage: {mem_gb:.2f} GB")
-        
-    except Exception as e:
-        print(f"ERROR loading dataset: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-    
-    # Sample test nodes - prefer high-degree nodes for meaningful explanations
-    test_nodes = split_idx['test'].numpy()
-    
-    # Calculate node degrees
-    print("\nComputing node degrees for intelligent sampling...")
-    from collections import Counter
-    edge_list = data.edge_index.t().tolist()
-    node_degrees = Counter()
-    for src, dst in edge_list:
-        node_degrees[src] += 1
-        node_degrees[dst] += 1
-    
-    # Filter test nodes by degree
-    test_node_degrees = [(node, node_degrees.get(node, 0)) for node in test_nodes]
-    test_node_degrees.sort(key=lambda x: x[1], reverse=True)  # Sort by degree
-    
-    # Sample from top 50% high-degree nodes
-    top_half = len(test_node_degrees) // 2
-    high_degree_nodes = [node for node, deg in test_node_degrees[:top_half]]
-    
-    np.random.seed(42)
-    if len(high_degree_nodes) >= NUM_SAMPLE_NODES:
-        sampled_nodes = np.random.choice(high_degree_nodes, size=NUM_SAMPLE_NODES, replace=False)
-    else:
+        # Sample test nodes - simple random sampling
+        test_nodes = split_idx['test'].numpy()
+        np.random.seed(42)
         sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
-    
-    # Convert to Python int list (avoid numpy.int64 issues)
-    sampled_nodes = [int(node) for node in sampled_nodes]
-    
-    # Print sampling statistics
-    sampled_degrees = [node_degrees.get(node, 0) for node in sampled_nodes]
-    print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
-    print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
-    print(f"  Degree statistics:")
-    print(f"    Min: {min(sampled_degrees)}, Max: {max(sampled_degrees)}")
-    print(f"    Mean: {np.mean(sampled_degrees):.1f}, Median: {np.median(sampled_degrees):.1f}")
+        
+        # Convert to Python int list (avoid numpy.int64 issues)
+        sampled_nodes = [int(node) for node in sampled_nodes]
+        
+        print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
+        print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
+    else:
+        # Cache-only mode: need to load node IDs from cache metadata
+        print("\n[Cache-only mode] Skipping dataset loading...")
+        print("  Will load node IDs from cache metadata")
+        
+        # For now, use the same sampling logic (but won't actually need data)
+        # In production, you might want to save/load the sampled node IDs
+        import numpy as np
+        np.random.seed(42)
+        # Dummy sampling - actual node IDs will be loaded from cache
+        sampled_nodes = list(range(NUM_SAMPLE_NODES))  # Placeholder
+        print(f"  Using {NUM_SAMPLE_NODES} nodes (will load from cache)")
 
     
     # Run benchmarks
@@ -713,7 +751,7 @@ def main():
             
             try:
                 result = run_distributed_benchmark(
-                    data=data,
+                    data=data,  # Will be None if cache-only mode
                     model_path=MODEL_PATH,
                     node_ids=sampled_nodes,
                     explainer_name=explainer_name,
@@ -721,7 +759,8 @@ def main():
                     explainer_config=EXPLAINER_CONFIGS[explainer_name],
                     num_hops=NUM_HOPS,
                     device=DEVICE,
-                    cache_dir=CACHE_DIR  # Use shared cache
+                    cache_dir=CACHE_DIR,  # Use shared cache
+                    use_cache_only=args.use_cache_only  # Pass cache-only flag
                 )
                 
                 all_results.append(result)

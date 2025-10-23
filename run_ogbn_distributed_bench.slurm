@@ -60,7 +60,12 @@ echo "Starting Distributed Benchmark"
 echo "=================================================="
 echo ""
 
-python src/benchmark_ogbn_distributed.py
+# First run: Generate cache by loading dataset and extracting subgraphs
+# This loads the full 111M-node graph, extracts subgraphs, and saves to cache/
+python src/benchmark_ogbn_distributed.py \
+    --num_nodes 100 \
+    --workers 20 \
+    --explainers apxchase
 
 EXIT_CODE=$?
 
