@@ -89,6 +89,11 @@ num_test: 138949          # Test set size (papers published >= 2019)
 num_target_nodes: 100  # Auto-sample 100 house nodes from test set
 # target_nodes will be automatically sampled from test set house nodes (labels 1,2,3)
 
+# ---- Distributed Benchmark Settings ----
+device: "cuda"              # Device for model inference (cuda/cpu)
+num_workers: [2, 4, 6, 8, 10]  # List of worker counts to test
+num_gpus: 1                 # Number of GPUs to use
+
 # 可选
 graph_index: 2   # 不传 --input 时回退用
 # save_dir: results/MUTAG/heuchase_mutag  # 不传 --output 时回退用

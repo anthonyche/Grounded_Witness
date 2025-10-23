@@ -441,7 +441,7 @@ def main():
     # Configuration with priority: CLI args > config file > defaults
     NUM_SAMPLE_NODES = args.num_nodes if args.num_nodes is not None else config.get('num_target_nodes', 100)
     NUM_HOPS = config.get('L', 2)
-    NUM_WORKERS_LIST = args.workers if args.workers is not None else [2, 4, 6, 8, 10]
+    NUM_WORKERS_LIST = args.workers if args.workers is not None else config.get('num_workers', [2, 4, 6, 8, 10])
     
     # Determine explainers to test
     if args.explainers is not None:
@@ -460,7 +460,8 @@ def main():
             EXPLAINERS = ['heuchase', 'apxchase', 'gnnexplainer']
     
     MODEL_PATH = args.model_path if args.model_path is not None else 'models/OGBN_Papers100M_epoch_20.pth'
-    DEVICE = 'cpu'  # Use CPU for distributed processing
+    DEVICE = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')  # Get device from config
+
     
     print("="*70)
     print("Distributed Benchmark Configuration")
@@ -471,6 +472,7 @@ def main():
     print(f"  Sample nodes: {NUM_SAMPLE_NODES}")
     print(f"  Num hops: {NUM_HOPS}")
     print(f"  Model: {MODEL_PATH}")
+    print(f"  Device: {DEVICE}")
     print("="*70)
     
     print("="*70)

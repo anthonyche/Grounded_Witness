@@ -3,11 +3,12 @@
 #SBATCH --output=logs/ogbn_distributed_%j.out
 #SBATCH --error=logs/ogbn_distributed_%j.err
 #SBATCH --time=12:00:00
-#SBATCH --partition=cpu              # CPU partition (for distributed processing)
-#SBATCH --cpus-per-task=32           # 32 CPU cores (enough for 10 workers + overhead)
-#SBATCH --mem=256G                   # 256GB RAM
+#SBATCH --partition=gpu              # GPU partition for model inference
+#SBATCH --cpus-per-task=20           # 20 CPU cores (enough for 10 workers)
+#SBATCH --mem=128G                   # 128GB RAM (reduced from 256G)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --gres=gpu:1                 # Request 1 GPU for model inference
 
 echo "=================================================="
 echo "SLURM Job: Distributed Explainability Benchmark on OGBN-Papers100M"
