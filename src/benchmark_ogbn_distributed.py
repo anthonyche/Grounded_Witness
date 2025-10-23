@@ -29,7 +29,7 @@ from ogb.nodeproppred import PygNodePropPredDataset
 # Import your explainer implementations
 import sys
 sys.path.append('src')
-from model import *
+# Don't use "from model import *" - it triggers model.py's if __name__ == '__main__'
 from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
 from heuchase import HeuChase
 from apxchase import ApxChase
@@ -457,7 +457,16 @@ def run_distributed_benchmark(
     print(f"Task runtime: {benchmark_result['task_runtime_mean']:.3f}s ± {benchmark_result['task_runtime_std']:.3f}s")
     print(f"Worker time: {benchmark_result['worker_time_mean']:.2f}s ± {benchmark_result['worker_time_std']:.2f}s")
     print(f"Load balance ratio: {benchmark_result['load_balance_ratio']:.3f}")
-    print(f"Speedup: {benchmark_result['worker_time_mean'] / total_parallel_time:.2f}x")
+    
+    # Calculate speedup correctly: (theoretical serial time) / (actual parallel time)
+    # Serial time = sum of all worker times (if run sequentially)
+    serial_time = sum(worker_times)
+    speedup = serial_time / total_parallel_time if total_parallel_time > 0 else 0
+    print(f"Speedup: {speedup:.2f}x (serial: {serial_time:.2f}s vs parallel: {total_parallel_time:.2f}s)")
+    
+    # Store speedup in results
+    benchmark_result['speedup'] = speedup
+    benchmark_result['serial_time'] = serial_time
     print("="*70)
     
     return benchmark_result
@@ -640,7 +649,8 @@ def main():
     print("-" * 60)
     
     for result in all_results:
-        speedup = result['worker_time_mean'] / result['parallel_time']
+        # Use the stored speedup value (calculated correctly in run_distributed_benchmark)
+        speedup = result.get('speedup', 0)
         print(f"{result['explainer']:<15} {result['num_workers']:<10} "
               f"{result['total_time']:<15.2f} {speedup:<10.2f}x")
 
