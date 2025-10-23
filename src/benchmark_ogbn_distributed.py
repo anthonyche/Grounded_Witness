@@ -732,15 +732,18 @@ def main():
             traceback.print_exc()
             raise
         
-        # Sample test nodes - simple random sampling
-        test_nodes = split_idx['test'].numpy()
+        # Sample nodes from train set (older papers with denser citation networks)
+        # Note: Using train set instead of test set because test papers (2019+) 
+        # have very sparse citations, resulting in tiny 2-hop subgraphs (~2.7 edges avg)
+        train_nodes = split_idx['train'].numpy()
         np.random.seed(42)
-        sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
+        sampled_nodes = np.random.choice(train_nodes, size=NUM_SAMPLE_NODES, replace=False)
         
         # Convert to Python int list (avoid numpy.int64 issues)
         sampled_nodes = [int(node) for node in sampled_nodes]
         
-        print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
+        print(f"\nSampled {len(sampled_nodes)} train nodes for explanation")
+        print(f"  (Using train set: older papers with denser citation networks)")
         print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
     else:
         # Cache-only mode: need to load node IDs from cache metadata
