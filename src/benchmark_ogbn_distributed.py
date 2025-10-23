@@ -149,9 +149,13 @@ class Coordinator:
     
     def create_tasks(self, node_ids, cache_dir='cache/subgraphs'):
         """为所有节点创建任务（支持缓存）"""
-        # Generate cache filename based on node_ids and num_hops
-        node_ids_hash = hash(tuple(sorted(node_ids)))
-        cache_file = f"{cache_dir}/subgraphs_hops{self.num_hops}_nodes{len(node_ids)}_hash{abs(node_ids_hash)}.pt"
+        import hashlib
+        
+        # Generate cache filename based on node_ids and num_hops (consistent with load_tasks_from_cache_only)
+        node_ids_tuple = tuple(sorted(node_ids))
+        node_str = str(node_ids_tuple)
+        hash_val = hashlib.md5(node_str.encode()).hexdigest()[:8]
+        cache_file = f"{cache_dir}/subgraphs_hops{self.num_hops}_nodes{len(node_ids)}_hash{hash_val}.pt"
         
         # Try to load from cache
         if os.path.exists(cache_file):
@@ -729,7 +733,6 @@ def main():
         
         # For now, use the same sampling logic (but won't actually need data)
         # In production, you might want to save/load the sampled node IDs
-        import numpy as np
         np.random.seed(42)
         # Dummy sampling - actual node IDs will be loaded from cache
         sampled_nodes = list(range(NUM_SAMPLE_NODES))  # Placeholder
@@ -785,23 +788,30 @@ def main():
                 print("Continuing with next configuration...\n")
     
     # Save complete results
-    with open('results/ogbn_distributed/complete_results.pkl', 'wb') as f:
-        pickle.dump(all_results, f)
-    
-    print("\n" + "="*70)
-    print("All benchmarks completed!")
-    print("="*70)
-    
-    # Print summary table
-    print("\nSummary Table:")
-    print(f"{'Explainer':<15} {'Workers':<10} {'Total Time (s)':<15} {'Speedup':<10}")
-    print("-" * 60)
-    
-    for result in all_results:
-        # Use the stored speedup value (calculated correctly in run_distributed_benchmark)
-        speedup = result.get('speedup', 0)
-        print(f"{result['explainer']:<15} {result['num_workers']:<10} "
-              f"{result['total_time']:<15.2f} {speedup:<10.2f}x")
+    if all_results:
+        with open('results/ogbn_distributed/complete_results.pkl', 'wb') as f:
+            pickle.dump(all_results, f)
+        
+        print("\n" + "="*70)
+        print("All benchmarks completed!")
+        print("="*70)
+        
+        # Print summary table
+        print("\nSummary Table:")
+        print(f"{'Explainer':<15} {'Workers':<10} {'Total Time (s)':<15} {'Speedup':<10}")
+        print("-" * 60)
+        
+        for result in all_results:
+            # Use the stored speedup value (calculated correctly in run_distributed_benchmark)
+            speedup = result.get('speedup', 0)
+            print(f"{result['explainer']:<15} {result['num_workers']:<10} "
+                  f"{result['total_time']:<15.2f} {speedup:<10.2f}x")
+    else:
+        print("\n" + "="*70)
+        print("ERROR: No benchmarks completed successfully!")
+        print("="*70)
+        import sys
+        sys.exit(1)
 
 
 if __name__ == '__main__':
