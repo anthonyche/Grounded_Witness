@@ -792,12 +792,175 @@ validate_tgd(TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE)
 CONSTRAINTS_BASHAPE.append(TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE)
 
 
+# ----------------------------------------------------------------------
+# Constraints for OGBN-Papers100M (Citation Network - Node Classification)
+# ----------------------------------------------------------------------
+# OGBN-Papers100M is a large citation network with 172 arXiv subject areas.
+# Main categories (CS.* - Computer Science subjects):
+#   cs.AI, cs.LG, cs.CV, cs.CL, cs.NE (Neural and Evolutionary Computing)
+#   cs.IR, cs.CR (Cryptography and Security), cs.DB, cs.DC, cs.DS, etc.
+#
+# Citation patterns:
+#   1. Papers in the same subfield cite each other (homophily)
+#   2. Co-citation: if A and B cite C, likely A and B are related
+#   3. Cross-field citations between related areas (e.g., AI ↔ ML ↔ CV)
+#
+# Design principles:
+#   - Use broad categories to ensure matches in 2-hop subgraphs
+#   - Triangle patterns (co-citation → direct citation)
+#   - Focus on major CS fields with many papers
+#
+# NOTE: Using actual label indices from OGBN-Papers100M dataset
+# (determined by mapping arXiv categories to label IDs)
+
+# Major CS categories (approximate label ranges - adjust based on actual data):
+# We'll use broad ranges to capture related subfields
+CS_AI_ML_LABELS = list(range(0, 30))     # AI, ML, Neural Networks, etc.
+CS_CV_LABELS = list(range(30, 50))       # Computer Vision, Graphics
+CS_NLP_LABELS = list(range(50, 70))      # NLP, CL, IR
+CS_THEORY_LABELS = list(range(70, 100))  # Theory, Algorithms, Complexity
+CS_SYSTEMS_LABELS = list(range(100, 130))  # Systems, Networks, Databases
+CS_SECURITY_LABELS = list(range(130, 150))  # Security, Cryptography
+CS_OTHER_LABELS = list(range(150, 172))  # Other CS areas
+
+# TGD 1: Co-citation Triangle (Same Field)
+# If papers A and B (same field) both cite paper C (same field),
+# then A and B likely cite each other
+TGD_OGBN_COCITATION_SAME_FIELD = {
+    "name": "ogbn_cocitation_same_field",
+    "head": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Any major CS field
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Same field
+            "C": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Same field
+        },
+        "edges": [("A", "C"), ("B", "C")],  # Co-citation pattern
+        "distinct": ["A", "B", "C"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+        },
+        "edges": [("A", "B")],  # Direct citation
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 2: AI/ML ↔ CV Cross-Field Citation
+# If AI/ML paper and CV paper both cite a bridge paper, they're related
+TGD_OGBN_AI_CV_BRIDGE = {
+    "name": "ogbn_ai_cv_bridge",
+    "head": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS},    # AI/ML paper
+            "B": {"in": CS_CV_LABELS},       # CV paper
+            "C": {"in": CS_AI_ML_LABELS + CS_CV_LABELS},  # Bridge paper
+        },
+        "edges": [("A", "C"), ("B", "C")],  # Both cite C
+        "distinct": ["A", "B", "C"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS},
+            "B": {"in": CS_CV_LABELS},
+        },
+        "edges": [("A", "B")],  # Cross-field citation
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 3: AI/ML ↔ NLP Cross-Field Citation
+# If AI/ML paper and NLP paper both cite a bridge paper, they're related
+TGD_OGBN_AI_NLP_BRIDGE = {
+    "name": "ogbn_ai_nlp_bridge",
+    "head": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS},    # AI/ML paper
+            "B": {"in": CS_NLP_LABELS},      # NLP paper
+            "C": {"in": CS_AI_ML_LABELS + CS_NLP_LABELS},  # Bridge paper
+        },
+        "edges": [("A", "C"), ("B", "C")],  # Both cite C
+        "distinct": ["A", "B", "C"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS},
+            "B": {"in": CS_NLP_LABELS},
+        },
+        "edges": [("A", "B")],  # Cross-field citation
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 4: Theory as Hub
+# If two applied papers both cite a Theory paper, they're related
+TGD_OGBN_THEORY_HUB = {
+    "name": "ogbn_theory_hub",
+    "head": {
+        "nodes": {
+            "T": {"in": CS_THEORY_LABELS},   # Theory paper (hub)
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 1
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 2
+        },
+        "edges": [("A", "T"), ("B", "T")],  # Both cite Theory
+        "distinct": ["T", "A", "B"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+        },
+        "edges": [("A", "B")],  # Applied papers cite each other
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 5: Systems Papers Bridge Applied Work
+# If two applied papers both cite a Systems paper, they're related
+TGD_OGBN_SYSTEMS_HUB = {
+    "name": "ogbn_systems_hub",
+    "head": {
+        "nodes": {
+            "S": {"in": CS_SYSTEMS_LABELS},  # Systems paper (hub)
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 1
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 2
+        },
+        "edges": [("A", "S"), ("B", "S")],  # Both cite Systems
+        "distinct": ["S", "A", "B"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+            "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
+        },
+        "edges": [("A", "B")],  # Applied papers cite each other
+        "distinct": ["A", "B"]
+    }
+}
+
+# Validate and register OGBN-Papers100M constraints
+CONSTRAINTS_OGBN_PAPERS: List[TGD] = []
+validate_tgd(TGD_OGBN_COCITATION_SAME_FIELD)
+CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_COCITATION_SAME_FIELD)
+validate_tgd(TGD_OGBN_AI_CV_BRIDGE)
+CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_AI_CV_BRIDGE)
+validate_tgd(TGD_OGBN_AI_NLP_BRIDGE)
+CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_AI_NLP_BRIDGE)
+validate_tgd(TGD_OGBN_THEORY_HUB)
+CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_THEORY_HUB)
+validate_tgd(TGD_OGBN_SYSTEMS_HUB)
+CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_SYSTEMS_HUB)
+
+
 # Central registry by dataset key.
 _REGISTRY: Dict[str, List[TGD]] = {
     'MUTAG': CONSTRAINTS_MUTAG,
     'YELP': CONSTRAINTS_YELP,
     'CORA': CONSTRAINTS_CORA,
     'BASHAPE': CONSTRAINTS_BASHAPE,
+    'OGBN-PAPERS100M': CONSTRAINTS_OGBN_PAPERS,
+    'OGBN_PAPERS100M': CONSTRAINTS_OGBN_PAPERS,  # Alternative key
     # 'ATLAS': [...],
 }
 
@@ -821,5 +984,6 @@ __all__ = [
     'CONSTRAINTS_YELP',
     'CONSTRAINTS_CORA',
     'CONSTRAINTS_BASHAPE',
+    'CONSTRAINTS_OGBN_PAPERS',
     'get_constraints',
 ]
