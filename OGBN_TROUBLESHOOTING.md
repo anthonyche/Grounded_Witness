@@ -1,16 +1,43 @@
 # OGBN Training Failed - Troubleshooting Guide
 
-## 🔍 Problem Analysis
+## 🔍 Common Exit Codes
 
-Your training job exited immediately with code 1, indicating an error occurred before training started.
+### Exit Code 137: System Memory (RAM) OOM ⭐ NEW
+**Cause**: Linux OOM Killer terminated process due to insufficient RAM
 
-**Symptoms:**
-- Training exits immediately (exit code 1)
-- GPU shows 0 MiB memory usage
-- Dataset folder only 3.3GB (should be 60GB+)
-- No error messages in main output
+**Symptoms**:
+- Job runs for a few seconds/minutes then dies
+- No Python error message
+- Last output: "Using 'NeighborSampler' without a 'pyg-lib'..."
+- System logs show OOM Killer activity
 
-## 🎯 Most Likely Causes
+**Fix**: See `EXIT_CODE_137_FIX.md`
+```bash
+# Quick fix in train_ogbn_papers100m.slurm
+#SBATCH --mem=256G        # Increase RAM (was 128G)
+NUM_WORKERS=0             # Disable DataLoader workers (was 4)
+```
+
+**Why**: Each DataLoader worker copies the entire graph (~60GB). With 4 workers:
+- Main process: 60GB
+- 4 workers: 4 × 60GB = 240GB
+- Total: 300GB > 128GB ❌
+
+### Exit Code 141: SIGPIPE Error
+**Cause**: Broken pipe from `yes y |` command
+
+**Fix**: See `EXIT_CODE_141_FIX.md`
+```bash
+# Remove pipe in Slurm script
+python src/Train_OGBN_HPC_MiniBatch.py  # Direct execution
+```
+
+### Exit Code 1: General Error
+**Cause**: Missing dependencies, import errors, or configuration issues
+
+**Fix**: See sections below
+
+## 🎯 Most Likely Causes (Exit Code 1)
 
 ### 1. Missing OGB Library ⭐ (MOST LIKELY)
 The `ogb` package is not installed in your conda environment.

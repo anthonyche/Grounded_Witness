@@ -6,7 +6,7 @@
 #SBATCH --partition=gpu              # GPU partition
 #SBATCH --gres=gpu:1                 # Request 1 GPU
 #SBATCH --cpus-per-task=8            # 8 CPU cores
-#SBATCH --mem=128G                   # 256GB RAM (dataset ~60GB + model + overhead)
+#SBATCH --mem=256G                   # 256GB RAM (dataset 60GB + DataLoader workers 4x50GB = 256GB)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -90,7 +90,7 @@ DROPOUT=0.5
 WEIGHT_DECAY=0.0
 BATCH_SIZE=1024          # Mini-batch size
 NUM_NEIGHBORS="15 10"    # Neighbor sampling: [15 neighbors in layer 1, 10 in layer 2]
-NUM_WORKERS=4            # Data loader workers
+NUM_WORKERS=0            # Data loader workers (0 = main process, saves RAM)
 LOG_STEPS=1
 
 echo "=================================================="
