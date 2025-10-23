@@ -83,7 +83,7 @@ echo "  PYTORCH_CUDA_ALLOC_CONF: $PYTORCH_CUDA_ALLOC_CONF"
 echo ""
 
 # Training configuration (极致内存优化 - 适配 128GB RAM)
-EPOCHS=100
+EPOCHS=20
 LR=0.01
 HIDDEN_DIM=16            # Minimal hidden dim (降低模型内存)
 DROPOUT=0.5
