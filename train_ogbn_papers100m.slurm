@@ -88,8 +88,8 @@ LR=0.01
 HIDDEN_DIM=256
 DROPOUT=0.5
 WEIGHT_DECAY=0.0
-BATCH_SIZE=1024          # Mini-batch size
-NUM_NEIGHBORS="15 10"    # Neighbor sampling: [15 neighbors in layer 1, 10 in layer 2]
+BATCH_SIZE=512           # Reduced batch size (was 1024) to save RAM
+NUM_NEIGHBORS="10 5"     # Reduced neighbor sampling (was "15 10") to save RAM
 NUM_WORKERS=0            # Data loader workers (0 = main process, saves RAM)
 LOG_STEPS=1
 

@@ -225,7 +225,7 @@ def main():
         batch_size=batch_size,
         input_nodes=split_idx['train'],
         num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=False,  # Don't cache data in workers (saves RAM)
         shuffle=True,
     )
     
@@ -235,7 +235,7 @@ def main():
         batch_size=batch_size,
         input_nodes=split_idx['valid'],
         num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=False,  # Don't cache data in workers (saves RAM)
         shuffle=False,
     )
     
@@ -245,7 +245,7 @@ def main():
         batch_size=batch_size,
         input_nodes=split_idx['test'],
         num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=False,  # Don't cache data in workers (saves RAM)
         shuffle=False,
     )
     

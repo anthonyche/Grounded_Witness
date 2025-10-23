@@ -12,80 +12,141 @@
 ```
 基础数据集:               ~50-60 GB
 PyTorch Geometric 图结构: ~10-15 GB
+NeighborLoader 采样缓存:  ~20-40 GB (取决于 batch_size 和 num_neighbors)
 每个 DataLoader worker:   ~50-60 GB (复制整个图)
+persistent_workers=True:  额外 ~30-50 GB (缓存采样结果)
 ```
 
-### 之前的配置（导致 OOM）
+### 第一次尝试配置（导致 OOM）
 ```bash
 #SBATCH --mem=128G       # 申请 128GB RAM
 NUM_WORKERS=4            # 4个数据加载 worker
+persistent_workers=True  # 持久化 worker 缓存
+BATCH_SIZE=1024
+NUM_NEIGHBORS="15 10"
 ```
 
 **实际内存需求**: 
-- 主进程: 60GB (数据集)
+- 主进程: 60GB (数据集) + 40GB (采样缓存)
 - Worker 1-4: 4 × 60GB = 240GB
-- **总计**: ~300GB > 128GB ❌
+- Persistent cache: 4 × 40GB = 160GB
+- **总计**: ~500GB > 128GB ❌
 
-### 新的配置（修复后）
+### 第二次尝试配置（仍然 OOM）
 ```bash
 #SBATCH --mem=256G       # 申请 256GB RAM
-NUM_WORKERS=0            # 0个 worker（主进程加载）
+NUM_WORKERS=0            # 0个 worker
+persistent_workers=True  # 仍然启用（虽然 workers=0）
+BATCH_SIZE=1024
+NUM_NEIGHBORS="15 10"
 ```
 
 **实际内存需求**:
-- 主进程: 60GB (数据集) + 10GB (模型/梯度) = 70GB
-- **总计**: ~70GB < 256GB ✅
+- 主进程: 60GB (数据集) + 80GB (大batch采样) = 140GB
+- NeighborLoader cache: ~120GB (persistent_workers + 大邻居采样)
+- **总计**: ~260GB > 256GB ❌
+
+### 新的配置（修复后）✅
+```bash
+#SBATCH --mem=256G       # 申请 256GB RAM
+NUM_WORKERS=0            # 0个 worker（主进程加载）
+persistent_workers=False # 禁用持久化缓存
+BATCH_SIZE=512           # 减小 batch（减少采样开销）
+NUM_NEIGHBORS="10 5"     # 减少邻居采样（减少子图大小）
+```
+
+**实际内存需求**:
+- 主进程: 60GB (数据集) + 30GB (小batch采样) = 90GB
+- NeighborLoader: ~40GB (无缓存，小邻居采样)
+- **总计**: ~130GB < 256GB ✅
 
 ## 关键修改
 
-### 1. 增加 Slurm RAM 申请
-```bash
+### 1. 禁用 persistent_workers (关键！)
+```python
 # 修改前
-#SBATCH --mem=128G
+train_loader = NeighborLoader(
+    data,
+    persistent_workers=True if num_workers > 0 else False,  # 缓存数据
+    ...
+)
 
 # 修改后
-#SBATCH --mem=256G
+train_loader = NeighborLoader(
+    data,
+    persistent_workers=False,  # 不缓存（节省大量RAM）
+    ...
+)
 ```
 
-### 2. 减少 DataLoader Workers
+### 2. 减少 Batch Size
 ```bash
 # 修改前
-NUM_WORKERS=4  # 每个 worker 复制数据集
+BATCH_SIZE=1024  # 每次采样 1024 个节点
 
 # 修改后
-NUM_WORKERS=0  # 主进程单线程加载（更慢但省内存）
+BATCH_SIZE=512   # 减半（节省 ~40GB RAM）
 ```
 
-## NUM_WORKERS 的权衡
+### 3. 减少 Neighbor Sampling
+```bash
+# 修改前
+NUM_NEIGHBORS="15 10"  # 第1层15个邻居，第2层10个
 
-### NUM_WORKERS=0 (当前配置)
-- ✅ **内存**: 最低（~70GB）
-- ❌ **速度**: 较慢（主进程单线程）
-- 适用于: 超大数据集 + RAM 受限
+# 修改后
+NUM_NEIGHBORS="10 5"   # 减少邻居数（节省 ~30GB RAM）
+```
 
-### NUM_WORKERS=1
-- ✅ **内存**: 中等（~130GB）
-- ✅ **速度**: 中等（1个后台线程）
-- 适用于: 如果 256GB RAM 足够
-
-### NUM_WORKERS=4 (之前配置)
-- ❌ **内存**: 最高（~300GB）
-- ✅ **速度**: 最快（4个并行线程）
-- 适用于: 小数据集或超大 RAM (512GB+)
+### 4. 保持其他优化
+```bash
+#SBATCH --mem=256G  # 256GB RAM
+NUM_WORKERS=0       # 主进程单线程
+```
 
 ## 性能影响
 
-### 预期训练时间 (NUM_WORKERS=0)
-```
-每个 epoch: ~20-25 分钟 (比 NUM_WORKERS=4 慢 20-30%)
-100 epochs: ~30-40 小时
+### 预期训练时间对比
+
+| 配置 | Batch | Neighbors | Workers | 每 Epoch | 100 Epochs | RAM 使用 |
+|------|-------|-----------|---------|----------|------------|----------|
+| **最快** | 1024 | 15,10 | 4 | ~15 min | ~25 hrs | ~500GB ❌ |
+| **折中** | 1024 | 15,10 | 0 | ~20 min | ~33 hrs | ~260GB ❌ |
+| **当前** | 512 | 10,5 | 0 | ~30 min | ~50 hrs | ~130GB ✅ |
+
+### 权衡分析
+- **速度损失**: ~2倍慢（50hrs vs 25hrs）
+- **内存节省**: ~4倍少（130GB vs 500GB）
+- **稳定性**: ✅ 避免 OOM Killer
+- **结论**: 牺牲速度换取稳定性（在 256GB 限制下唯一可行方案）
+
+## NeighborLoader 内存消耗详解
+
+### Batch Size 影响
+```python
+# BATCH_SIZE=1024, NUM_NEIGHBORS=[15,10]
+每个 batch 采样节点数 ≈ 1024 × (1 + 15 + 15×10) = ~155,000 节点
+内存消耗 ≈ 155,000 × 128 (features) × 4 bytes ≈ 80 MB
+
+# BATCH_SIZE=512, NUM_NEIGHBORS=[10,5]  
+每个 batch 采样节点数 ≈ 512 × (1 + 10 + 10×5) = ~26,000 节点
+内存消耗 ≈ 26,000 × 128 × 4 bytes ≈ 13 MB
+
+节省: 80 - 13 = 67 MB per batch
+总节省 (多个 batch 缓存): ~40-80 GB
 ```
 
-### 如果有更多 RAM 可用
-如果集群节点有 512GB+ RAM:
-```bash
-#SBATCH --mem=512G
-NUM_WORKERS=2  # 折中方案
+### persistent_workers 影响
+```python
+# persistent_workers=True
+- Workers 保持活跃状态
+- 缓存所有采样的子图
+- 内存累积增长（不会释放）
+- 额外消耗: ~100-200 GB
+
+# persistent_workers=False
+- 每个 batch 后释放内存
+- 无缓存累积
+- 稍慢（需要重新采样）但内存安全
 ```
 
 ## 验证修复
