@@ -331,8 +331,27 @@ def main():
         
         epoch_time = time.time() - epoch_start
         
-        # Evaluate
-        if epoch % log_steps == 0 or epoch == 1:
+        # 临时方案：完全跳过中间评估（内存不足）
+        # 只保存模型，最后再评估
+        print(f"Epoch {epoch:03d} | Loss: {train_loss:.4f} | Time: {epoch_time:.2f}s")
+        
+        # 每 10 个 epoch 保存一次模型（基于 loss）
+        if epoch % 10 == 0 or epoch == 1:
+            # Save checkpoint based on loss
+            os.makedirs(args.save_dir, exist_ok=True)
+            model_path = os.path.join(args.save_dir, f'OGBN_Papers100M_epoch_{epoch}.pth')
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': train_loss,
+                'hidden_dim': hidden_dim,
+                'dropout': dropout,
+            }, model_path)
+            print(f"  → Model saved: {model_path}")
+        
+        # Evaluate (仅在需要时)
+        if False:  # 设置为 False 以完全跳过中间评估
             print(f"\nEpoch {epoch:03d} evaluation:")
             
             # 跳过 train 评估（节省时间和内存）
