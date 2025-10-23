@@ -517,6 +517,24 @@ def run_distributed_benchmark(
     # Store speedup in results
     benchmark_result['speedup'] = speedup
     benchmark_result['serial_time'] = serial_time
+    
+    # Analyze task success rate
+    success_count = sum(1 for r in all_task_results if r.get('explanation', {}).get('success', False))
+    error_count = sum(1 for r in all_task_results if 'error' in r.get('explanation', {}))
+    print(f"\nTask Analysis:")
+    print(f"  Total tasks: {len(all_task_results)}")
+    print(f"  Successful: {success_count} ({100*success_count/len(all_task_results):.1f}%)")
+    print(f"  Failed: {error_count} ({100*error_count/len(all_task_results):.1f}%)")
+    
+    # For chase-based explainers, show witness statistics
+    if explainer_name in ['heuchase', 'apxchase']:
+        witnesses = [r.get('explanation', {}).get('num_witnesses', 0) for r in all_task_results]
+        coverages = [r.get('explanation', {}).get('coverage', 0) for r in all_task_results]
+        if witnesses:
+            print(f"  Witnesses: {np.mean(witnesses):.1f} ± {np.std(witnesses):.1f} (avg)")
+        if coverages:
+            print(f"  Coverage: {np.mean(coverages):.1f} ± {np.std(coverages):.1f} (avg)")
+    
     print("="*70)
     
     return benchmark_result
@@ -642,16 +660,43 @@ def main():
         traceback.print_exc()
         raise
     
-    # Sample test nodes
+    # Sample test nodes - prefer high-degree nodes for meaningful explanations
     test_nodes = split_idx['test'].numpy()
+    
+    # Calculate node degrees
+    print("\nComputing node degrees for intelligent sampling...")
+    from collections import Counter
+    edge_list = data.edge_index.t().tolist()
+    node_degrees = Counter()
+    for src, dst in edge_list:
+        node_degrees[src] += 1
+        node_degrees[dst] += 1
+    
+    # Filter test nodes by degree
+    test_node_degrees = [(node, node_degrees.get(node, 0)) for node in test_nodes]
+    test_node_degrees.sort(key=lambda x: x[1], reverse=True)  # Sort by degree
+    
+    # Sample from top 50% high-degree nodes
+    top_half = len(test_node_degrees) // 2
+    high_degree_nodes = [node for node, deg in test_node_degrees[:top_half]]
+    
     np.random.seed(42)
-    sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
+    if len(high_degree_nodes) >= NUM_SAMPLE_NODES:
+        sampled_nodes = np.random.choice(high_degree_nodes, size=NUM_SAMPLE_NODES, replace=False)
+    else:
+        sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
     
     # Convert to Python int list (avoid numpy.int64 issues)
     sampled_nodes = [int(node) for node in sampled_nodes]
     
+    # Print sampling statistics
+    sampled_degrees = [node_degrees.get(node, 0) for node in sampled_nodes]
     print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
     print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
+    print(f"  Degree statistics:")
+    print(f"    Min: {min(sampled_degrees)}, Max: {max(sampled_degrees)}")
+    print(f"    Mean: {np.mean(sampled_degrees):.1f}, Median: {np.median(sampled_degrees):.1f}")
+
     
     # Run benchmarks
     all_results = []
@@ -666,29 +711,39 @@ def main():
             print(f"Benchmark: {explainer_name} with {num_workers} workers")
             print(f"{'='*70}\n")
             
-            result = run_distributed_benchmark(
-                data=data,
-                model_path=MODEL_PATH,
-                node_ids=sampled_nodes,
-                explainer_name=explainer_name,
-                num_workers=num_workers,
-                explainer_config=EXPLAINER_CONFIGS[explainer_name],
-                num_hops=NUM_HOPS,
-                device=DEVICE,
-                cache_dir=CACHE_DIR  # Use shared cache
-            )
-            
-            all_results.append(result)
-            
-            # Save intermediate results
-            os.makedirs('results/ogbn_distributed', exist_ok=True)
-            result_file = f'results/ogbn_distributed/{explainer_name}_workers{num_workers}.json'
-            with open(result_file, 'w') as f:
-                # Remove detailed results for JSON
-                summary = {k: v for k, v in result.items() if k not in ['task_results', 'worker_results']}
-                json.dump(summary, f, indent=2)
-            
-            print(f"Saved results to {result_file}")
+            try:
+                result = run_distributed_benchmark(
+                    data=data,
+                    model_path=MODEL_PATH,
+                    node_ids=sampled_nodes,
+                    explainer_name=explainer_name,
+                    num_workers=num_workers,
+                    explainer_config=EXPLAINER_CONFIGS[explainer_name],
+                    num_hops=NUM_HOPS,
+                    device=DEVICE,
+                    cache_dir=CACHE_DIR  # Use shared cache
+                )
+                
+                all_results.append(result)
+                
+                # Save intermediate results
+                os.makedirs('results/ogbn_distributed', exist_ok=True)
+                result_file = f'results/ogbn_distributed/{explainer_name}_workers{num_workers}.json'
+                
+                try:
+                    with open(result_file, 'w') as f:
+                        # Remove detailed results for JSON
+                        summary = {k: v for k, v in result.items() if k not in ['task_results', 'worker_results']}
+                        json.dump(summary, f, indent=2)
+                    print(f"Saved results to {result_file}")
+                except Exception as e:
+                    print(f"Warning: Failed to save JSON results: {e}")
+                    
+            except Exception as e:
+                print(f"\nERROR in benchmark ({explainer_name}, {num_workers} workers): {e}")
+                import traceback
+                traceback.print_exc()
+                print("Continuing with next configuration...\n")
     
     # Save complete results
     with open('results/ogbn_distributed/complete_results.pkl', 'wb') as f:
