@@ -239,16 +239,63 @@ These require HPC submission, but all **logic** has been validated.
 
 ---
 
-## 📝 Files Modified
+## � Bug #5: Node Task Misidentified as Graph Task
+
+**Location**: `src/benchmark_ogbn_distributed.py`, `src/apxchase.py`, `src/heuchase.py`
+
+**Problem**:
+Distributed benchmark extracts L-hop subgraphs for **node classification**, but doesn't set `task` or `root` attributes:
+
+```python
+# Old code in extract_subgraph():
+subgraph = Data(
+    x=...,
+    edge_index=...,
+    y=...,
+    target_node=mapping.item()
+)
+# Missing: task='node', root=...
+```
+
+Result: ApxChase/HeuChase couldn't detect it's a node task:
+```python
+is_node_task = (task_type == 'node') or \
+               (root_val is not None and root_val >= 0) or \
+               (y_ref is not None and ...)
+# → All False! Treated as graph task
+```
+
+**Consequence**: 
+- Labels not extracted correctly (kept full graph labels instead of subgraph labels)
+- Debug output showed: `is_node_task=False (graph task)` ❌
+
+**Fix**: Added task metadata when extracting subgraphs:
+```python
+subgraph = Data(...)
+subgraph.task = 'node'
+subgraph.root = mapping.item()  # Target node in subgraph
+subgraph._target_node_subgraph_id = mapping.item()
+```
+
+**Status**: ✅ Fixed
+
+---
+
+## �📝 Files Modified
 
 1. `src/benchmark_ogbn_distributed.py`:
    - Fixed numpy import issue (line 728)
    - Fixed cache filename generation (line 152)
+   - Fixed LoadBalancer.get_load_stats() (line 95)
    - Added empty results handling (line 787)
+   - **Added task metadata in extract_subgraph() (line 145)**
 
-2. Created `pre_flight_check.py` (new)
-3. Created `quick_test.py` (new)
-4. Created `BUG_FIXES.md` (this file)
+2. `src/apxchase.py`:
+   - Removed debug print statements (line 313-318)
+
+3. Created `pre_flight_check.py` (new)
+4. Created `quick_test.py` (new)
+5. Created `BUG_FIXES.md` (this file)
 
 ---
 

@@ -147,6 +147,11 @@ class Coordinator:
                 target_node=mapping.item(),  # Target node in subgraph
             )
             
+            # Mark as node classification task
+            subgraph.task = 'node'
+            subgraph.root = mapping.item()  # Root is the target node in subgraph coordinates
+            subgraph._target_node_subgraph_id = mapping.item()
+            
             num_edges = edge_index.size(1)
             return subgraph, num_edges
             

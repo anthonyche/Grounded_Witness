@@ -309,13 +309,8 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     if hasattr(H, 'y') and H.y is not None:
         if is_node_task:
             data.y = H.y[nodes]  # Node classification: index by nodes
-            # DEBUG: Check if labels are extracted correctly
-            print(f"[_induce_subgraph DEBUG] H.y exists, is_node_task={is_node_task}, H.num_nodes={H_num_nodes}")
-            print(f"[_induce_subgraph DEBUG] nodes: {nodes[:min(5, len(nodes))].tolist()}")
-            print(f"[_induce_subgraph DEBUG] H.y[nodes]: {H.y[nodes][:min(5, len(nodes))].tolist() if len(nodes) > 0 else 'empty'}")
         else:
             data.y = H.y  # Graph classification: keep as-is
-            print(f"[_induce_subgraph DEBUG] H.y exists, is_node_task={is_node_task} (graph task)")
     
     if hasattr(H, 'y_type') and H.y_type is not None:
         if is_node_task:
