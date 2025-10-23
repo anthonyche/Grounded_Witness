@@ -94,11 +94,22 @@ class LoadBalancer:
     
     def get_load_stats(self):
         """获取负载统计"""
+        total = np.sum(self.worker_loads)
+        min_load = np.min(self.worker_loads)
+        max_load = np.max(self.worker_loads)
+        avg_load = total / len(self.worker_loads) if len(self.worker_loads) > 0 else 0
+        balance_ratio = min_load / max_load if max_load > 0 else 1.0
+        
         return {
-            'mean': np.mean(self.worker_loads),
-            'std': np.std(self.worker_loads),
-            'min': np.min(self.worker_loads),
-            'max': np.max(self.worker_loads),
+            'total_load': int(total),
+            'avg_load': float(avg_load),
+            'min_load': int(min_load),
+            'max_load': int(max_load),
+            'balance_ratio': float(balance_ratio),
+            'mean': float(np.mean(self.worker_loads)),
+            'std': float(np.std(self.worker_loads)),
+            'min': int(min_load),
+            'max': int(max_load),
             'loads': self.worker_loads.copy()
         }
 
@@ -540,7 +551,7 @@ def run_distributed_benchmark(
         'worker_time_max': np.max(worker_times),
         
         # Load balancing
-        'load_balance_ratio': load_stats['min'] / load_stats['max'],
+        'load_balance_ratio': load_stats['balance_ratio'],
         'load_stats': load_stats,
         
         # Detailed results

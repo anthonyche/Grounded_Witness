@@ -39,6 +39,36 @@ def test_cache_filename_consistency():
     print(f"✓ Cache filename consistent: {cache_file1}")
 
 
+def test_load_balancer():
+    """Test LoadBalancer and load_stats keys"""
+    print("\nTesting LoadBalancer...")
+    
+    sys.path.append('src')
+    from benchmark_ogbn_distributed import LoadBalancer
+    
+    balancer = LoadBalancer(num_workers=4)
+    
+    # Assign some tasks
+    balancer.assign_task(100)
+    balancer.assign_task(200)
+    balancer.assign_task(150)
+    balancer.assign_task(50)
+    
+    load_stats = balancer.get_load_stats()
+    
+    # Check all required keys exist
+    required_keys = ['total_load', 'avg_load', 'min_load', 'max_load', 
+                     'balance_ratio', 'mean', 'std', 'min', 'max', 'loads']
+    
+    for key in required_keys:
+        assert key in load_stats, f"Missing key: {key}"
+    
+    print(f"✓ LoadBalancer working correctly")
+    print(f"  Total load: {load_stats['total_load']}")
+    print(f"  Balance ratio: {load_stats['balance_ratio']:.2f}")
+    print(f"  Worker loads: {load_stats['loads']}")
+
+
 def create_dummy_graph(num_nodes=1000, num_edges=5000):
     """Create a dummy graph for testing"""
     edge_index = torch.randint(0, num_nodes, (2, num_edges))
@@ -189,6 +219,7 @@ def main():
     
     try:
         test_cache_filename_consistency()
+        test_load_balancer()
         test_subgraph_extraction()
         test_model_loading()
         test_explainer_import()

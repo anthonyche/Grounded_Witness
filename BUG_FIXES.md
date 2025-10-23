@@ -2,7 +2,38 @@
 
 ## 🐛 Bugs Fixed
 
-### 1. **UnboundLocalError: 'np' referenced before assignment**
+### 1. **KeyError: 'total_load' in load_stats**
+**Location**: `src/benchmark_ogbn_distributed.py` line 473
+
+**Problem**:
+```python
+load_stats = balancer.get_load_stats()
+print(f"Total load: {load_stats['total_load']:,}")  # ❌ KeyError
+```
+
+`LoadBalancer.get_load_stats()` returned `{'mean', 'std', 'min', 'max'}` but code tried to access `{'total_load', 'avg_load', 'min_load', 'max_load', 'balance_ratio'}`.
+
+**Fix**: Updated `get_load_stats()` to return both naming conventions for backward compatibility:
+```python
+return {
+    'total_load': int(total),
+    'avg_load': float(avg_load),
+    'min_load': int(min_load),
+    'max_load': int(max_load),
+    'balance_ratio': float(balance_ratio),
+    'mean': float(np.mean(self.worker_loads)),  # For Coordinator
+    'std': float(np.std(self.worker_loads)),    # For Coordinator
+    'min': int(min_load),                        # For Coordinator
+    'max': int(max_load),                        # For Coordinator
+    'loads': self.worker_loads.copy()
+}
+```
+
+**Status**: ✅ Fixed
+
+---
+
+### 2. **UnboundLocalError: 'np' referenced before assignment**
 **Location**: `src/benchmark_ogbn_distributed.py` line 717
 
 **Problem**:
@@ -21,7 +52,7 @@ else:
 
 ---
 
-### 2. **Cache Filename Mismatch**
+### 3. **Cache Filename Mismatch**
 **Location**: `src/benchmark_ogbn_distributed.py`
 
 **Problem**:
@@ -46,7 +77,7 @@ hash_val = abs(hash(tuple(sorted(node_ids))))
 
 ---
 
-### 3. **No Error Handling for Empty Results**
+### 4. **No Error Handling for Empty Results**
 **Location**: `src/benchmark_ogbn_distributed.py` line ~790
 
 **Problem**: If all benchmarks fail, tries to save empty results and create summary table, leading to crashes
@@ -135,6 +166,7 @@ python quick_test.py
 
 | Issue | Type | Impact | Status |
 |-------|------|--------|--------|
+| KeyError: 'total_load' | Runtime Error | Job fails after extraction | ✅ Fixed |
 | UnboundLocalError (np) | Runtime Error | Job fails immediately | ✅ Fixed |
 | Cache filename mismatch | Logic Bug | Cache never used (1097s vs 2s) | ✅ Fixed |
 | Empty results handling | Error Handling | Unclear failure messages | ✅ Fixed |
