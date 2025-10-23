@@ -326,14 +326,18 @@ def main():
         # Train
         train_loss = train_epoch(model, train_loader, optimizer, device)
         
+        # 训练后立即清理内存
+        clear_all_memory()
+        
         epoch_time = time.time() - epoch_start
         
         # Evaluate
         if epoch % log_steps == 0 or epoch == 1:
             print(f"\nEpoch {epoch:03d} evaluation:")
             
-            # 动态创建评估 loaders（节省内存）
-            train_acc = evaluate(model, train_loader, evaluator, device, desc='Train eval')
+            # 跳过 train 评估（节省时间和内存）
+            # train_acc = evaluate(model, train_loader, evaluator, device, desc='Train eval')
+            train_acc = 0.0  # 占位符
             
             # 创建 val_loader，评估后立即删除
             val_loader = create_eval_loader(data, split_idx, 'valid', num_neighbors, batch_size, num_workers)
@@ -349,7 +353,6 @@ def main():
             
             print(f"Epoch {epoch:03d} | "
                   f"Loss: {train_loss:.4f} | "
-                  f"Train: {train_acc:.4f} | "
                   f"Val: {valid_acc:.4f} | "
                   f"Test: {test_acc:.4f} | "
                   f"Time: {epoch_time:.2f}s")
@@ -397,8 +400,16 @@ def main():
         model.load_state_dict(best_model_state)
         print("\nFinal evaluation with best model:")
         
-        # 动态创建评估 loaders
-        train_acc = evaluate(model, train_loader, evaluator, device, desc='Final train')
+        # 删除 train_loader 以释放内存
+        del train_loader
+        clear_all_memory()
+        
+        # 动态创建评估 loaders（包括 train）
+        print("Creating train loader for final evaluation...")
+        train_loader_eval = create_eval_loader(data, split_idx, 'train', num_neighbors, batch_size, num_workers)
+        train_acc = evaluate(model, train_loader_eval, evaluator, device, desc='Final train')
+        del train_loader_eval
+        clear_all_memory()
         
         val_loader = create_eval_loader(data, split_idx, 'valid', num_neighbors, batch_size, num_workers)
         valid_acc = evaluate(model, val_loader, evaluator, device, desc='Final val')
