@@ -17,6 +17,7 @@ import time
 import heapq
 import json
 import os
+import psutil  # For memory monitoring
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
@@ -87,26 +88,34 @@ class Coordinator:
         
     def extract_subgraph(self, node_id):
         """提取节点的 L-hop 邻居子图"""
-        # Extract k-hop subgraph
-        subset, edge_index, mapping, edge_mask = k_hop_subgraph(
-            node_idx=node_id,
-            num_hops=self.num_hops,
-            edge_index=self.data.edge_index,
-            relabel_nodes=True,
-            num_nodes=self.data.num_nodes,
-        )
-        
-        # Create subgraph data
-        subgraph = Data(
-            x=self.data.x[subset],
-            edge_index=edge_index,
-            y=self.data.y[subset],
-            subset=subset,
-            target_node=mapping.item(),  # Target node in subgraph
-        )
-        
-        num_edges = edge_index.size(1)
-        return subgraph, num_edges
+        try:
+            # Extract k-hop subgraph
+            subset, edge_index, mapping, edge_mask = k_hop_subgraph(
+                node_idx=node_id,
+                num_hops=self.num_hops,
+                edge_index=self.data.edge_index,
+                relabel_nodes=True,
+                num_nodes=self.data.num_nodes,
+            )
+            
+            # Create subgraph data
+            subgraph = Data(
+                x=self.data.x[subset].clone().detach(),  # Clone to avoid memory sharing
+                edge_index=edge_index.clone().detach(),
+                y=self.data.y[subset].clone().detach(),
+                subset=subset.clone().detach(),
+                target_node=mapping.item(),  # Target node in subgraph
+            )
+            
+            num_edges = edge_index.size(1)
+            return subgraph, num_edges
+            
+        except Exception as e:
+            print(f"\nERROR extracting subgraph for node {node_id}: {e}")
+            print(f"  Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def create_tasks(self, node_ids):
         """为所有节点创建任务"""
@@ -114,6 +123,11 @@ class Coordinator:
         print(f"Coordinator: Extracting {len(node_ids)} subgraphs...")
         
         for i, node_id in enumerate(tqdm(node_ids, desc="Extracting subgraphs")):
+            try:
+                subgraph, num_edges = self.extract_subgraph(node_id)
+            except Exception as e:
+                print(f"\nFailed to extract subgraph for node {node_id} (task {i})")
+                raise
             subgraph, num_edges = self.extract_subgraph(node_id)
             task = SubgraphTask(
                 task_id=i,
@@ -305,23 +319,54 @@ def run_distributed_benchmark(
     print(f"  Explainer config: {explainer_config}")
     print("="*70)
     
-    # Load model
-    checkpoint = torch.load(model_path, map_location='cpu')
-    model = GCN_2_OGBN(
-        input_dim=128,
-        hidden_dim=checkpoint['hidden_dim'],
-        output_dim=172,
-        dropout=0.5
-    )
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
+    try:
+        # Load model
+        print("Loading model...")
+        checkpoint = torch.load(model_path, map_location='cpu')
+        model = GCN_2_OGBN(
+            input_dim=128,
+            hidden_dim=checkpoint['hidden_dim'],
+            output_dim=172,
+            dropout=0.5
+        )
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+        print(f"  Model loaded successfully (hidden_dim={checkpoint['hidden_dim']})")
+        
+        # Print memory before subgraph extraction
+        process = psutil.Process()
+        mem_before = process.memory_info().rss / 1024**3
+        print(f"  Memory before subgraph extraction: {mem_before:.2f} GB")
+        
+    except Exception as e:
+        print(f"ERROR loading model: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
     # Phase 1: Coordinator extracts subgraphs and creates tasks
-    coordinator = Coordinator(data, model, device, num_hops=num_hops)
+    try:
+        coordinator = Coordinator(data, model, device, num_hops=num_hops)
+    except Exception as e:
+        print(f"ERROR creating coordinator: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
-    start_time = time.time()
-    tasks = coordinator.create_tasks(node_ids)
-    extraction_time = time.time() - start_time
+    try:
+        start_time = time.time()
+        tasks = coordinator.create_tasks(node_ids)
+        extraction_time = time.time() - start_time
+        
+        # Print memory after subgraph extraction
+        mem_after = process.memory_info().rss / 1024**3
+        print(f"  Memory after subgraph extraction: {mem_after:.2f} GB (+{mem_after - mem_before:.2f} GB)")
+        
+    except Exception as e:
+        print(f"ERROR creating tasks (extracting subgraphs): {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
     # Phase 2: Distribute tasks with load balancing
     task_assignments, load_stats = coordinator.distribute_tasks(tasks, num_workers)
@@ -510,16 +555,35 @@ def main():
     }
     
     print("\nLoading OGBN-Papers100M dataset...")
-    dataset = PygNodePropPredDataset(name='ogbn-papers100M', root='./datasets')
-    data = dataset[0]
-    split_idx = dataset.get_idx_split()
+    try:
+        dataset = PygNodePropPredDataset(name='ogbn-papers100M', root='./datasets')
+        data = dataset[0]
+        split_idx = dataset.get_idx_split()
+        
+        print(f"  Dataset loaded successfully!")
+        print(f"  Nodes: {data.num_nodes:,}")
+        print(f"  Edges: {data.edge_index.size(1):,}")
+        print(f"  Features shape: {data.x.shape}")
+        print(f"  Labels shape: {data.y.shape}")
+        
+        # Print memory usage
+        import psutil
+        process = psutil.Process()
+        mem_gb = process.memory_info().rss / 1024**3
+        print(f"  Current memory usage: {mem_gb:.2f} GB")
+        
+    except Exception as e:
+        print(f"ERROR loading dataset: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
-    # Sample 100 test nodes
+    # Sample test nodes
     test_nodes = split_idx['test'].numpy()
     np.random.seed(42)
     sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
     
-    print(f"Sampled {len(sampled_nodes)} test nodes for explanation")
+    print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
     
     # Run benchmarks
     all_results = []
