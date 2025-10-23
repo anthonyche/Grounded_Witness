@@ -2,11 +2,11 @@
 #SBATCH --job-name=ogbn_papers100m_gcn
 #SBATCH --output=logs/ogbn_papers100m_%j.out
 #SBATCH --error=logs/ogbn_papers100m_%j.err
-#SBATCH --time=48:00:00              # 48 hours (large dataset)
+#SBATCH --time=12:00:00              # 48 hours (large dataset)
 #SBATCH --partition=gpu              # GPU partition
 #SBATCH --gres=gpu:1                 # Request 1 GPU
 #SBATCH --cpus-per-task=8            # 8 CPU cores
-#SBATCH --mem=256G                   # 256GB RAM (dataset ~60GB + model + overhead)
+#SBATCH --mem=128G                   # 256GB RAM (dataset ~60GB + model + overhead)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
@@ -35,6 +35,7 @@ echo ""
 # Load modules (adjust based on your HPC environment)
 module purge
 module load Miniconda3
+conda activate skyexp
 
 
 # Set environment variables
@@ -104,7 +105,6 @@ du -sh datasets/
 du -sh models/
 echo ""
 
-# Deactivate environment
-deactivate
+
 
 exit $TRAIN_EXIT_CODE
