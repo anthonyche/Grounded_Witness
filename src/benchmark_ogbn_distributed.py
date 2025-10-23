@@ -89,6 +89,10 @@ class Coordinator:
     def extract_subgraph(self, node_id):
         """提取节点的 L-hop 邻居子图"""
         try:
+            # Convert node_id to int (handle numpy.int64)
+            if isinstance(node_id, np.integer):
+                node_id = int(node_id)
+            
             # Extract k-hop subgraph
             subset, edge_index, mapping, edge_mask = k_hop_subgraph(
                 node_idx=node_id,
@@ -112,6 +116,7 @@ class Coordinator:
             
         except Exception as e:
             print(f"\nERROR extracting subgraph for node {node_id}: {e}")
+            print(f"  Node ID type: {type(node_id)}")
             print(f"  Error type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
@@ -583,7 +588,11 @@ def main():
     np.random.seed(42)
     sampled_nodes = np.random.choice(test_nodes, size=NUM_SAMPLE_NODES, replace=False)
     
+    # Convert to Python int list (avoid numpy.int64 issues)
+    sampled_nodes = [int(node) for node in sampled_nodes]
+    
     print(f"\nSampled {len(sampled_nodes)} test nodes for explanation")
+    print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
     
     # Run benchmarks
     all_results = []

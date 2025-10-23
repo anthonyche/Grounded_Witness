@@ -70,6 +70,9 @@ if __name__ == '__main__':
     np.random.seed(42)
     sampled_nodes = np.random.choice(test_nodes, size=NUM_TEST_NODES, replace=False)
     
+    # Convert to Python int to avoid numpy.int64 issues
+    sampled_nodes = [int(node) for node in sampled_nodes]
+    
     print(f"\nSampled nodes: {sampled_nodes}")
     
     # Test with GNNExplainer only
