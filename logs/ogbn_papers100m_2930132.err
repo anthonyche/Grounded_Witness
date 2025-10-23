@@ -1,0 +1,6 @@
+usage: conda [-h] [-v] [--no-plugins] [-V] COMMAND ...
+conda: error: argument COMMAND: invalid choice: 'activate' (choose from 'clean', 'compare', 'config', 'create', 'info', 'init', 'install', 'list', 'notices', 'package', 'remove', 'uninstall', 'rename', 'run', 'search', 'update', 'upgrade', 'content-trust', 'doctor', 'repoquery', 'env')
++ tee training_log.txt
++ python src/Train_OGBN_HPC_MiniBatch.py --config config.yaml --data_root ./datasets --epochs 20 --lr 0.01 --hidden_dim 16 --dropout 0.5 --weight_decay 0.0 --batch_size 128 --num_neighbors 3 2 --num_workers 0 --log_steps 10 --save_dir models
++ TRAIN_EXIT_CODE=0
++ set +x
