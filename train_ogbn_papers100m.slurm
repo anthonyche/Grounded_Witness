@@ -37,6 +37,41 @@ module purge
 module load Miniconda3
 conda activate skyexp
 
+# Check Python environment
+echo "Python environment check:"
+which python
+python --version
+echo ""
+
+# Check required packages
+echo "Checking required packages..."
+python -c "import torch; print(f'PyTorch: {torch.__version__}')" || echo "ERROR: PyTorch not found"
+python -c "import torch_geometric; print(f'PyG: {torch_geometric.__version__}')" || echo "ERROR: PyG not found"
+python -c "from ogb.nodeproppred import PygNodePropPredDataset; print('OGB: OK')" || echo "ERROR: OGB not found - installing..."
+
+# Install OGB if missing
+python -c "from ogb.nodeproppred import PygNodePropPredDataset" 2>/dev/null || pip install ogb
+
+echo "Package check complete."
+echo ""
+
+# Run environment test before training
+echo "=================================================="
+echo "Running environment test..."
+echo "=================================================="
+python test_ogbn_environment.py
+TEST_EXIT_CODE=$?
+
+if [ $TEST_EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "ERROR: Environment test failed!"
+    echo "Please install missing packages and try again."
+    exit 1
+fi
+
+echo ""
+echo "Environment test passed! Proceeding with training..."
+echo ""
 
 # Set environment variables
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
@@ -72,6 +107,8 @@ echo ""
 echo "Starting training..."
 echo ""
 
+# Add error handling and verbose output
+set -x  # Print commands as they execute
 yes y | srun python src/Train_OGBN_HPC.py \
     --config config.yaml \
     --data_root ./datasets \
@@ -81,9 +118,22 @@ yes y | srun python src/Train_OGBN_HPC.py \
     --dropout $DROPOUT \
     --weight_decay $WEIGHT_DECAY \
     --log_steps $LOG_STEPS \
-    --save_dir models
+    --save_dir models 2>&1 | tee training_log.txt
 
-TRAIN_EXIT_CODE=$?
+TRAIN_EXIT_CODE=${PIPESTATUS[0]}
+set +x
+
+# If training failed, show error details
+if [ $TRAIN_EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "=================================================="
+    echo "ERROR: Training failed with exit code $TRAIN_EXIT_CODE"
+    echo "=================================================="
+    echo ""
+    echo "Last 50 lines of output:"
+    tail -50 training_log.txt
+    echo ""
+fi
 
 echo ""
 echo "=================================================="
