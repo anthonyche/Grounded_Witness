@@ -1,2 +1,0 @@
-# Grounded_Witness
-

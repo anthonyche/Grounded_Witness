@@ -416,39 +416,93 @@ def run_distributed_benchmark(
 def main():
     """主函数：运行完整实验"""
     
-    # Configuration
-    NUM_SAMPLE_NODES = 100
-    NUM_HOPS = 2
-    NUM_WORKERS_LIST = [2, 4, 6, 8, 10]
-    EXPLAINERS = ['heuchase', 'apxchase', 'gnnexplainer']
-    MODEL_PATH = 'models/OGBN_Papers100M_epoch_20.pth'  # Use epoch 20 model
+    import argparse
+    import yaml
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='OGBN-Papers100M Distributed Benchmark')
+    parser.add_argument('--config', type=str, default='config.yaml', help='Path to config file')
+    parser.add_argument('--explainers', nargs='+', default=None, help='List of explainers to test (heuchase, apxchase, gnnexplainer)')
+    parser.add_argument('--workers', nargs='+', type=int, default=None, help='List of worker counts to test')
+    parser.add_argument('--num_nodes', type=int, default=None, help='Number of nodes to sample')
+    parser.add_argument('--model_path', type=str, default=None, help='Path to trained model')
+    args = parser.parse_args()
+    
+    # Load config file
+    try:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+        print(f"Loaded config from: {args.config}")
+    except Exception as e:
+        print(f"Warning: Could not load config file: {e}")
+        print("Using default configuration")
+        config = {}
+    
+    # Configuration with priority: CLI args > config file > defaults
+    NUM_SAMPLE_NODES = args.num_nodes if args.num_nodes is not None else config.get('num_target_nodes', 100)
+    NUM_HOPS = config.get('L', 2)
+    NUM_WORKERS_LIST = args.workers if args.workers is not None else [2, 4, 6, 8, 10]
+    
+    # Determine explainers to test
+    if args.explainers is not None:
+        EXPLAINERS = args.explainers
+    else:
+        # Try to infer from config exp_name
+        exp_name = config.get('exp_name', 'heuchase_ogbn')
+        if 'heuchase' in exp_name.lower():
+            EXPLAINERS = ['heuchase', 'apxchase', 'gnnexplainer']
+        elif 'apxchase' in exp_name.lower():
+            EXPLAINERS = ['apxchase', 'gnnexplainer']
+        elif 'gnnexplainer' in exp_name.lower():
+            EXPLAINERS = ['gnnexplainer']
+        else:
+            # Default: test all
+            EXPLAINERS = ['heuchase', 'apxchase', 'gnnexplainer']
+    
+    MODEL_PATH = args.model_path if args.model_path is not None else 'models/OGBN_Papers100M_epoch_20.pth'
     DEVICE = 'cpu'  # Use CPU for distributed processing
     
+    print("="*70)
+    print("Distributed Benchmark Configuration")
+    print("="*70)
+    print(f"  Config file: {args.config}")
+    print(f"  Explainers: {EXPLAINERS}")
+    print(f"  Worker counts: {NUM_WORKERS_LIST}")
+    print(f"  Sample nodes: {NUM_SAMPLE_NODES}")
+    print(f"  Num hops: {NUM_HOPS}")
+    print(f"  Model: {MODEL_PATH}")
+    print("="*70)
+    
+    print("="*70)
+    
     # Load constraints for OGBN-Papers100M
-    print("Loading constraints for OGBN-Papers100M...")
+    print("\nLoading constraints for OGBN-Papers100M...")
     CONSTRAINTS = get_constraints('OGBN-PAPERS100M')
     print(f"  Loaded {len(CONSTRAINTS)} constraints:")
     for i, tgd in enumerate(CONSTRAINTS, 1):
         print(f"    {i}. {tgd['name']}")
     
-    # Explainer-specific configurations
+    # Explainer-specific configurations from config file
     EXPLAINER_CONFIGS = {
         'heuchase': {
             'Sigma': CONSTRAINTS,  # Use OGBN-Papers100M constraints
-            'L': NUM_HOPS,  # L-hop subgraph
-            'k': 10,  # window size
-            'B': 5,  # budget for backchase
-            'm': 6,  # Edmonds candidates
-            'noise_std': 1e-3,
+            'L': NUM_HOPS,
+            'k': config.get('k', 10),
+            'B': config.get('Budget', 5),
+            'm': config.get('heuchase_m', 6),
+            'noise_std': config.get('heuchase_noise_std', 1e-3),
         },
         'apxchase': {
-            'Sigma': CONSTRAINTS,  # Use OGBN-Papers100M constraints
+            'Sigma': CONSTRAINTS,
             'L': NUM_HOPS,
-            'k': 10,
-            'B': 5,
+            'k': config.get('k', 10),
+            'B': config.get('Budget', 5),
+            'alpha': config.get('alpha', 1.0),
+            'beta': config.get('beta', 0.0),
+            'gamma': config.get('gamma', 1.0),
         },
         'gnnexplainer': {
-            'epochs': 100,  # GNNExplainer training epochs
+            'epochs': 100,
             'lr': 0.01,
         }
     }
