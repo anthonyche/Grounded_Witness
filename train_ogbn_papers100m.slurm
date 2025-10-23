@@ -72,7 +72,7 @@ echo ""
 echo "Starting training..."
 echo ""
 
-python src/Train_OGBN_HPC.py \
+yes y | srun python src/Train_OGBN_HPC.py \
     --config config.yaml \
     --data_root ./datasets \
     --epochs $EPOCHS \
