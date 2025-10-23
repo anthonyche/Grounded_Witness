@@ -109,7 +109,8 @@ echo ""
 
 # Add error handling and verbose output
 set -x  # Print commands as they execute
-yes y | srun python src/Train_OGBN_HPC.py \
+# Direct execution (no srun needed for single-node jobs)
+yes y | python src/Train_OGBN_HPC.py \
     --config config.yaml \
     --data_root ./datasets \
     --epochs $EPOCHS \
