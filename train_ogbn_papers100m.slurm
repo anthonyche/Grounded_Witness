@@ -88,18 +88,24 @@ LR=0.01
 HIDDEN_DIM=256
 DROPOUT=0.5
 WEIGHT_DECAY=0.0
+BATCH_SIZE=1024          # Mini-batch size
+NUM_NEIGHBORS="15 10"    # Neighbor sampling: [15 neighbors in layer 1, 10 in layer 2]
+NUM_WORKERS=4            # Data loader workers
 LOG_STEPS=1
 
 echo "=================================================="
 echo "Training Configuration:"
 echo "=================================================="
 echo "  Dataset: ogbn-papers100M"
-echo "  Model: 2-layer GCN"
+echo "  Model: 2-layer GCN (Mini-Batch)"
 echo "  Epochs: $EPOCHS"
 echo "  Learning rate: $LR"
 echo "  Hidden dimension: $HIDDEN_DIM"
 echo "  Dropout: $DROPOUT"
 echo "  Weight decay: $WEIGHT_DECAY"
+echo "  Batch size: $BATCH_SIZE"
+echo "  Neighbor sampling: $NUM_NEIGHBORS"
+echo "  Num workers: $NUM_WORKERS"
 echo "=================================================="
 echo ""
 
@@ -109,8 +115,8 @@ echo ""
 
 # Add error handling and verbose output
 set -x  # Print commands as they execute
-# Direct execution (no srun needed for single-node jobs)
-yes y | python src/Train_OGBN_HPC.py \
+# Direct execution with mini-batch training (no srun needed for single-node jobs)
+yes y | python src/Train_OGBN_HPC_MiniBatch.py \
     --config config.yaml \
     --data_root ./datasets \
     --epochs $EPOCHS \
@@ -118,6 +124,9 @@ yes y | python src/Train_OGBN_HPC.py \
     --hidden_dim $HIDDEN_DIM \
     --dropout $DROPOUT \
     --weight_decay $WEIGHT_DECAY \
+    --batch_size $BATCH_SIZE \
+    --num_neighbors $NUM_NEIGHBORS \
+    --num_workers $NUM_WORKERS \
     --log_steps $LOG_STEPS \
     --save_dir models 2>&1 | tee training_log.txt
 
