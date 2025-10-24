@@ -73,7 +73,7 @@ echo ""
 python src/benchmark_ogbn_distributed.py \
     --num_nodes 100 \
     --workers 20 \
-    --explainers apxchase
+    --explainers heuchase
 
 EXIT_CODE=$?
 
