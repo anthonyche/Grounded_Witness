@@ -109,21 +109,44 @@ class TreeCycleGenerator:
         print(f"  Total tree edges: {len(edge_list):,}")
         
         # 2. 添加环边（同层节点间的循环边）
+        # 优化：使用采样而不是遍历所有节点对（避免 O(N²) 复杂度）
         cycle_edges = 0
+        print("\nAdding cycle edges (using efficient sampling)...")
+        
         for level, nodes in level_nodes.items():
             if len(nodes) <= 1:
                 continue
             
-            # 在同层节点间随机添加环边
-            for i in range(len(nodes)):
-                for j in range(i + 1, len(nodes)):
-                    if np.random.rand() < self.cycle_prob:
-                        # 双向边（无向图）
-                        edge_list.append([nodes[i], nodes[j]])
-                        edge_list.append([nodes[j], nodes[i]])
-                        cycle_edges += 2
+            # 计算要添加的边数（基于概率）
+            max_possible_edges = len(nodes) * (len(nodes) - 1) // 2
+            target_edges = int(max_possible_edges * self.cycle_prob)
+            
+            # 限制最大边数（避免过度密集）
+            target_edges = min(target_edges, len(nodes) * 10)  # 每个节点最多 10 条环边
+            
+            if target_edges > 0:
+                # 随机采样节点对（不重复）
+                sampled_pairs = set()
+                attempts = 0
+                max_attempts = target_edges * 3  # 避免无限循环
+                
+                while len(sampled_pairs) < target_edges and attempts < max_attempts:
+                    i = np.random.randint(0, len(nodes))
+                    j = np.random.randint(0, len(nodes))
+                    if i != j:
+                        pair = tuple(sorted([nodes[i], nodes[j]]))
+                        sampled_pairs.add(pair)
+                    attempts += 1
+                
+                # 添加采样的边
+                for node_i, node_j in sampled_pairs:
+                    edge_list.append([node_i, node_j])
+                    edge_list.append([node_j, node_i])
+                    cycle_edges += 2
+                
+                print(f"  Level {level}: Added {len(sampled_pairs)} cycle edges ({len(nodes):,} nodes)")
         
-        print(f"  Cycle edges added: {cycle_edges:,}")
+        print(f"\n  Total cycle edges added: {cycle_edges:,}")
         print(f"  Total edges: {len(edge_list):,}")
         
         # 3. 转换为 PyG Data 格式
