@@ -264,21 +264,45 @@ class Coordinator:
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue):
     """Worker 进程：运行解释算法"""
     try:
-        # Import model class inside worker to avoid triggering __main__ during spawn
-        from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
+        import os
+        print(f"Worker {worker_id}: Started (PID: {os.getpid()})")
+        print(f"Worker {worker_id}: Device: {device}, Tasks: {len(tasks)}")
         
-        # Load model
+        # Import model class inside worker to avoid triggering __main__ during spawn
+        print(f"Worker {worker_id}: Importing model class...")
+        from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
+        print(f"Worker {worker_id}: Model class imported")
+        
+        # Check GPU availability
+        if device == 'cuda':
+            import torch
+            print(f"Worker {worker_id}: CUDA available: {torch.cuda.is_available()}")
+            if torch.cuda.is_available():
+                print(f"Worker {worker_id}: CUDA device count: {torch.cuda.device_count()}")
+                print(f"Worker {worker_id}: Current CUDA device: {torch.cuda.current_device()}")
+        
+        print(f"Worker {worker_id}: Creating model...")
         model = GCN_2_OGBN(
             input_dim=128,
             hidden_dim=model_state['hidden_dim'],
             output_dim=172,
             dropout=0.5
-        ).to(device)
+        )
+        print(f"Worker {worker_id}: Model created, moving to {device}...")
+        model = model.to(device)
+        print(f"Worker {worker_id}: Model on device, loading state dict...")
         model.load_state_dict(model_state['model_state_dict'])
         model.eval()
         
+        print(f"Worker {worker_id}: Model loaded and ready")
+        
+        print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
+        
         # Initialize explainer
         if explainer_name == 'heuchase':
+            print(f"Worker {worker_id}: Importing HeuChase...")
+            from heuchase import HeuChase
+            print(f"Worker {worker_id}: Creating HeuChase with constraints={explainer_config.get('Sigma', None) is not None}...")
             # HeuChase: Edmonds-based witness generation
             explainer = HeuChase(
                 model=model,
@@ -290,7 +314,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 noise_std=explainer_config.get('noise_std', 1e-3),
                 debug=False,
             )
+            print(f"Worker {worker_id}: HeuChase initialized")
         elif explainer_name == 'apxchase':
+            print(f"Worker {worker_id}: Importing ApxChase...")
+            from apxchase import ApxChase
+            print(f"Worker {worker_id}: Creating ApxChase with constraints={explainer_config.get('Sigma', None) is not None}...")
             # ApxChase: Streaming edge-insertion chase
             explainer = ApxChase(
                 model=model,
@@ -300,11 +328,15 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 B=explainer_config.get('B', 5),
                 debug=False,
             )
+            print(f"Worker {worker_id}: ApxChase initialized")
         elif explainer_name == 'gnnexplainer':
+            print(f"Worker {worker_id}: GNNExplainer uses baseline function (no init needed)")
             # GNNExplainer: PyG baseline
             explainer = None  # Will use run_gnn_explainer_node function
         else:
             raise ValueError(f"Unknown explainer: {explainer_name}")
+        
+        print(f"Worker {worker_id}: ✓ Explainer ready, starting {len(tasks)} tasks")
         
         results = []
         total_time = 0
@@ -505,6 +537,17 @@ def run_distributed_benchmark(
     
     # Phase 3: Workers process tasks in parallel
     print(f"\nStarting {num_workers} worker processes...")
+    print(f"Device: {device}")
+    if device == 'cuda':
+        print(f"CUDA Info:")
+        print(f"  - Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"  - Device count: {torch.cuda.device_count()}")
+            print(f"  - Current device: {torch.cuda.current_device()}")
+            print(f"  - Device name: {torch.cuda.get_device_name()}")
+            print(f"  - Memory allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+            print(f"  - Memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
+    
     start_time = time.time()
     
     # Create result queue
@@ -512,20 +555,40 @@ def run_distributed_benchmark(
     
     # Start worker processes
     processes = []
+    print(f"\nLaunching workers sequentially (will initialize in parallel)...")
     for worker_id in range(num_workers):
         worker_tasks = task_assignments[worker_id]
+        print(f"  Starting worker {worker_id} ({len(worker_tasks)} tasks, {sum(t.num_edges for t in worker_tasks):,} edges)...")
         p = mp.Process(
             target=worker_process,
             args=(worker_id, worker_tasks, checkpoint, explainer_name, explainer_config, device, result_queue)
         )
         p.start()
         processes.append(p)
+        print(f"  Worker {worker_id} launched (PID: {p.pid})")
+        # Small delay to stagger GPU initialization (avoid race condition)
+        time.sleep(0.1)
+    
+    print(f"\nAll {num_workers} workers launched, waiting for results...")
+    print(f"Note: If workers hang here, check worker output above for where they stopped")
+    print(f"Expected sequence: Started -> Import -> Model -> Explainer -> Tasks")
     
     # Collect results
     worker_results = []
-    for _ in range(num_workers):
-        result = result_queue.get()
-        worker_results.append(result)
+    result_timeout = 600  # 10 minutes per result (generous timeout)
+    for i in range(num_workers):
+        print(f"  Waiting for result {i+1}/{num_workers} (timeout: {result_timeout}s)...")
+        try:
+            result = result_queue.get(timeout=result_timeout)
+            worker_results.append(result)
+            worker_id = result.get('worker_id', 'unknown')
+            num_tasks = result.get('num_tasks', 0)
+            total_time = result.get('total_time', 0)
+            print(f"  ✓ Received result from worker {worker_id} ({num_tasks} tasks, {total_time:.2f}s)")
+        except:
+            print(f"  ✗ Timeout waiting for result {i+1}/{num_workers}!")
+            print(f"     This usually means a worker is hung. Check worker output above.")
+            break
     
     # Wait for all processes to complete
     for p in processes:
