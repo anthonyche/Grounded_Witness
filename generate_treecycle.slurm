@@ -3,7 +3,7 @@
 #SBATCH --output=logs/treecycle_gen_%j.out
 #SBATCH --error=logs/treecycle_gen_%j.err
 #SBATCH --time=06:00:00            # 6 hours (中等规模足够)
-#SBATCH --partition=cpu            # CPU partition (不需要 GPU)
+#SBATCH --partition=gpu            # CPU partition (不需要 GPU)
 #SBATCH --cpus-per-task=20         # 20 CPU cores
 #SBATCH --mem=128G                  # 64GB RAM (中等规模足够)
 #SBATCH --nodes=1
