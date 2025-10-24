@@ -8,6 +8,7 @@
 #SBATCH --mem=128G                  # 64GB RAM (中等规模足够)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --gres=gpu:1                 # Request 1 GPU for model inference
 
 echo "=================================================="
 echo "SLURM Job: TreeCycle Graph Generation"
