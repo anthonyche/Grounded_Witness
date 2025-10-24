@@ -263,15 +263,25 @@ class Coordinator:
 
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue):
     """Worker 进程：运行解释算法"""
+    # CRITICAL: Print IMMEDIATELY to detect if function is even entered
+    import sys
+    import os
+    sys.stdout.flush()
+    print(f"\n{'='*60}", flush=True)
+    print(f"WORKER {worker_id}: FUNCTION ENTRY (PID: {os.getpid()})", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    sys.stdout.flush()
+    
     try:
-        import os
-        print(f"Worker {worker_id}: Started (PID: {os.getpid()})")
-        print(f"Worker {worker_id}: Device: {device}, Tasks: {len(tasks)}")
+        print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
+        sys.stdout.flush()
         
         # Import model class inside worker to avoid triggering __main__ during spawn
-        print(f"Worker {worker_id}: Importing model class...")
+        print(f"Worker {worker_id}: Importing model class...", flush=True)
+        sys.stdout.flush()
         from Train_OGBN_HPC_MiniBatch import GCN_2_OGBN
-        print(f"Worker {worker_id}: Model class imported")
+        print(f"Worker {worker_id}: Model class imported ✓", flush=True)
+        sys.stdout.flush()
         
         # Check GPU availability
         if device == 'cuda':
@@ -555,19 +565,24 @@ def run_distributed_benchmark(
     
     # Start worker processes
     processes = []
-    print(f"\nLaunching workers sequentially (will initialize in parallel)...")
+    print(f"\nLaunching workers sequentially (will initialize in parallel)...", flush=True)
+    sys.stdout.flush()
+    
     for worker_id in range(num_workers):
         worker_tasks = task_assignments[worker_id]
-        print(f"  Starting worker {worker_id} ({len(worker_tasks)} tasks, {sum(t.num_edges for t in worker_tasks):,} edges)...")
+        print(f"  Starting worker {worker_id} ({len(worker_tasks)} tasks, {sum(t.num_edges for t in worker_tasks):,} edges)...", flush=True)
+        sys.stdout.flush()
+        
         p = mp.Process(
             target=worker_process,
             args=(worker_id, worker_tasks, checkpoint, explainer_name, explainer_config, device, result_queue)
         )
         p.start()
         processes.append(p)
-        print(f"  Worker {worker_id} launched (PID: {p.pid})")
+        print(f"  Worker {worker_id} launched (PID: {p.pid})", flush=True)
+        sys.stdout.flush()
         # Small delay to stagger GPU initialization (avoid race condition)
-        time.sleep(0.1)
+        time.sleep(0.2)  # Increased from 0.1 to 0.2
     
     print(f"\nAll {num_workers} workers launched, waiting for results...")
     print(f"Note: If workers hang here, check worker output above for where they stopped")
@@ -685,6 +700,13 @@ def main():
     
     import argparse
     import yaml
+    import sys
+    
+    # CRITICAL: Ensure unbuffered output from the start
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+    print("="*70, flush=True)
+    print("MAIN PROCESS STARTED", flush=True)
+    print("="*70, flush=True)
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='OGBN-Papers100M Distributed Benchmark')

@@ -38,9 +38,17 @@ echo ""
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
+# CRITICAL: Force unbuffered output for Python (important for multiprocessing debugging)
+export PYTHONUNBUFFERED=1
+
+# CRITICAL: Disable CUDA device caching to avoid deadlocks with many processes
+export CUDA_LAUNCH_BLOCKING=1
+
 echo "Environment variables:"
 echo "  OMP_NUM_THREADS: $OMP_NUM_THREADS"
 echo "  MKL_NUM_THREADS: $MKL_NUM_THREADS"
+echo "  PYTHONUNBUFFERED: $PYTHONUNBUFFERED"
+echo "  CUDA_LAUNCH_BLOCKING: $CUDA_LAUNCH_BLOCKING"
 echo ""
 
 # Check required packages
