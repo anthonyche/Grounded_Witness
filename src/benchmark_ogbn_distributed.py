@@ -311,8 +311,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         
         print(f"Worker {worker_id}: Processing {len(tasks)} tasks...")
         
-        for task in tasks:
+        for task_idx, task in enumerate(tasks):
             start_time = time.time()
+            
+            # Print progress for each task
+            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
             
             # Move subgraph to device
             subgraph = task.subgraph_data.to(device)
@@ -360,6 +363,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             
             elapsed = time.time() - start_time
             total_time += elapsed
+            
+            # Print task completion
+            success_str = "✓" if explanation_result.get('success', False) else "✗"
+            if explainer_name in ['heuchase', 'apxchase']:
+                witnesses = explanation_result.get('num_witnesses', 0)
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s, {witnesses} witnesses)")
+            else:
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)")
             
             result = {
                 'task_id': task.task_id,
