@@ -590,9 +590,13 @@ def run_distributed_benchmark(
     
     # Collect results
     worker_results = []
-    result_timeout = 600  # 10 minutes per result (generous timeout)
+    # Increased timeout for large subgraphs (some may take 20+ minutes)
+    # With 100 nodes and L=2 hops, largest subgraphs can have 20K+ edges
+    result_timeout = 3600  # 1 hour per worker (conservative for large graphs)
+    print(f"  Worker timeout: {result_timeout}s ({result_timeout/60:.0f} minutes)")
+    
     for i in range(num_workers):
-        print(f"  Waiting for result {i+1}/{num_workers} (timeout: {result_timeout}s)...")
+        print(f"  Waiting for result {i+1}/{num_workers}...")
         try:
             result = result_queue.get(timeout=result_timeout)
             worker_results.append(result)
@@ -600,9 +604,10 @@ def run_distributed_benchmark(
             num_tasks = result.get('num_tasks', 0)
             total_time = result.get('total_time', 0)
             print(f"  ✓ Received result from worker {worker_id} ({num_tasks} tasks, {total_time:.2f}s)")
-        except:
+        except Exception as e:
             print(f"  ✗ Timeout waiting for result {i+1}/{num_workers}!")
-            print(f"     This usually means a worker is hung. Check worker output above.")
+            print(f"     This usually means a worker is hung or task is too large.")
+            print(f"     Exception: {e}")
             break
     
     # Wait for all processes to complete
@@ -832,14 +837,39 @@ def main():
         # Note: Using train set instead of test set because test papers (2019+) 
         # have very sparse citations, resulting in tiny 2-hop subgraphs (~2.7 edges avg)
         train_nodes = split_idx['train'].numpy()
-        np.random.seed(42)
-        sampled_nodes = np.random.choice(train_nodes, size=NUM_SAMPLE_NODES, replace=False)
+        
+        # Filter out nodes with extreme degrees to get more balanced workload
+        # Calculate node degrees (out-degree in citation graph)
+        edge_index = data.edge_index.cpu()
+        degrees = torch.bincount(edge_index[0], minlength=data.num_nodes)
+        
+        # Filter train nodes by degree (avoid isolated nodes and super-hubs)
+        MIN_DEGREE = 5    # At least 5 citations (avoid isolated nodes)
+        MAX_DEGREE = 500  # At most 500 citations (avoid super-hubs that create huge subgraphs)
+        
+        train_node_degrees = degrees[train_nodes]
+        valid_mask = (train_node_degrees >= MIN_DEGREE) & (train_node_degrees <= MAX_DEGREE)
+        filtered_train_nodes = train_nodes[valid_mask]
+        
+        print(f"\nFiltering train nodes by degree [{MIN_DEGREE}, {MAX_DEGREE}]:")
+        print(f"  Original train nodes: {len(train_nodes):,}")
+        print(f"  Nodes with degree < {MIN_DEGREE}: {(train_node_degrees < MIN_DEGREE).sum():,}")
+        print(f"  Nodes with degree > {MAX_DEGREE}: {(train_node_degrees > MAX_DEGREE).sum():,}")
+        print(f"  Filtered train nodes: {len(filtered_train_nodes):,}")
+        
+        if len(filtered_train_nodes) < NUM_SAMPLE_NODES:
+            print(f"  WARNING: Not enough filtered nodes ({len(filtered_train_nodes)} < {NUM_SAMPLE_NODES})")
+            print(f"  Using all filtered nodes instead")
+            sampled_nodes = filtered_train_nodes
+        else:
+            np.random.seed(42)
+            sampled_nodes = np.random.choice(filtered_train_nodes, size=NUM_SAMPLE_NODES, replace=False)
         
         # Convert to Python int list (avoid numpy.int64 issues)
         sampled_nodes = [int(node) for node in sampled_nodes]
         
         print(f"\nSampled {len(sampled_nodes)} train nodes for explanation")
-        print(f"  (Using train set: older papers with denser citation networks)")
+        print(f"  (Using train set with balanced degrees: {MIN_DEGREE}-{MAX_DEGREE} citations)")
         print(f"  Sample IDs: {sampled_nodes[:5]}... (showing first 5)")
     else:
         # Cache-only mode: need to load node IDs from cache metadata

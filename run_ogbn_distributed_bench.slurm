@@ -2,7 +2,7 @@
 #SBATCH --job-name=ogbn_distributed_bench
 #SBATCH --output=logs/ogbn_distributed_%j.out
 #SBATCH --error=logs/ogbn_distributed_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00              # Increased to 24 hours for large subgraphs
 #SBATCH --partition=gpu              # GPU partition for model inference
 #SBATCH --cpus-per-task=20           # 20 CPU cores (enough for 10 workers)
 #SBATCH --mem=128G                   # 128GB RAM (reduced from 256G)
