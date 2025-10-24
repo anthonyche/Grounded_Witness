@@ -197,6 +197,17 @@ df_figure_12 = pd.DataFrame(figure_12)
 #对df_figure_12画柱状图，支持对数坐标
 #Overall Fidelity- score 
 
+# Figure 13: OGBN-100M Runtime vs Number of Processors (distributed benchmark)
+figure_13 = {
+    "Processors": [4, 6, 8, 10, 20],
+    "ApxIChase": [13949.72, 8995.12, 6707.92, 5252.43, 2642.99],
+    "HeuIChase": [282.06, 180.21, 133.43, 103.84, 53.75],
+    "GNNExplainer": [169.24, 104.52, 74.7, 56.91, 31.7],
+}
+df_figure_13 = pd.DataFrame(figure_13)
+# 折线图：展示分布式计算的加速效果
+# OGBN-Papers100M Runtime vs Number of Workers 
+
 
 def plot_bar_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, legend_loc='upper left', legend_ncol=1, ylim_top=None, ylim_bottom=None):
     """绘制柱状图"""
@@ -536,6 +547,23 @@ plot_bar_chart(
     legend_ncol=5,
     ylim_top=1.2,
     ylim_bottom=0
+)
+
+# Figure 13: OGBN-100M Runtime vs Number of Processors (line chart, log scale)
+# 展示分布式计算的加速效果
+plot_line_chart(
+    df_figure_13,
+    'Processors',
+    ['ApxIChase', 'HeuIChase', 'GNNExplainer'],
+    'Total Runtime (sec)',
+    'Number of Workers',
+    'figure_13_ogbn_runtime_vs_workers.png',
+    use_log=True,
+    legend_loc='upper right',
+    legend_ncol=1,
+    ylim_bottom=10,
+    ylim_top=20000,
+    xticks=[4, 6, 8, 10, 20]
 )
 
 print("\n✓ All figures generated successfully!")

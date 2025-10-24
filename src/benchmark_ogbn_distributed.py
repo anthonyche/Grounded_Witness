@@ -266,11 +266,19 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     # CRITICAL: Print IMMEDIATELY to detect if function is even entered
     import sys
     import os
+    import psutil
+    import gc
+    
     sys.stdout.flush()
     print(f"\n{'='*60}", flush=True)
     print(f"WORKER {worker_id}: FUNCTION ENTRY (PID: {os.getpid()})", flush=True)
     print(f"{'='*60}\n", flush=True)
     sys.stdout.flush()
+    
+    # Monitor memory at start
+    process = psutil.Process(os.getpid())
+    mem_start = process.memory_info().rss / 1024**3  # GB
+    print(f"Worker {worker_id}: Initial memory: {mem_start:.2f} GB", flush=True)
     
     try:
         print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
@@ -414,6 +422,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             else:
                 print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)")
             
+            # Explicit garbage collection after each task to free memory
+            del subgraph
+            gc.collect()
+            
             result = {
                 'task_id': task.task_id,
                 'node_id': task.node_id,
@@ -432,7 +444,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             'results': results,
         })
         
+        # Final memory check
+        mem_end = process.memory_info().rss / 1024**3  # GB
+        mem_delta = mem_end - mem_start
         print(f"Worker {worker_id}: Completed {len(tasks)} tasks in {total_time:.2f}s")
+        print(f"Worker {worker_id}: Memory: {mem_start:.2f} GB → {mem_end:.2f} GB (Δ {mem_delta:+.2f} GB)", flush=True)
         
     except Exception as e:
         print(f"Worker {worker_id}: Error - {e}")

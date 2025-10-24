@@ -4,8 +4,8 @@
 #SBATCH --error=logs/ogbn_distributed_%j.err
 #SBATCH --time=24:00:00              # Increased to 24 hours for large subgraphs
 #SBATCH --partition=gpu              # GPU partition for model inference
-#SBATCH --cpus-per-task=20           # 20 CPU cores (enough for 10 workers)
-#SBATCH --mem=128G                   # 128GB RAM (reduced from 256G)
+#SBATCH --cpus-per-task=20           # 20 CPU cores (10 workers × 2 cores)
+#SBATCH --mem=200G                   # Increased to 200GB for 10 workers (was 128GB causing OOM)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1                 # Request 1 GPU for model inference
@@ -70,9 +70,11 @@ echo ""
 
 # First run: Generate cache by loading dataset and extracting subgraphs
 # This loads the full 111M-node graph, extracts subgraphs, and saves to cache/
+# NOTE: Reduced workers from 20 to 10 to avoid OOM (each worker needs ~6-8GB RAM)
+# With 128GB RAM: 10 workers × ~10GB/worker = ~100GB (safe margin)
 python src/benchmark_ogbn_distributed.py \
     --num_nodes 100 \
-    --workers 20 \
+    --workers 10 \
     --explainers heuchase
 
 EXIT_CODE=$?

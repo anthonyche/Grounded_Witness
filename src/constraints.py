@@ -965,6 +965,152 @@ CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_SYSTEMS_HUB)  # Duplicate 5
 # Total: 10 constraints for benchmark testing
 
 
+# ----------------------------------------------------------------------
+# Constraints for TreeCycle (Synthetic Graph - Scalability Testing)
+# ----------------------------------------------------------------------
+# TreeCycle 是一个混合了树结构和环结构的合成图
+# - 树结构：从根节点开始，每个节点有多个子节点（branching factor）
+# - 环结构：同层节点间有环边
+# - 节点类型：5种类型（0-4），随机分配
+#
+# 约束设计目标：
+# 1. 测试跨层传播（父子关系）
+# 2. 测试同层传播（环结构）
+# 3. 测试多跳推理
+# 4. 可扩展到 billion-scale
+
+# TGD 1: Parent-Child Type Propagation（父子类型传播）
+# If parent of type A has child of type B, and another parent of type A has child of type C,
+# then B and C are related
+TGD_TREECYCLE_PARENT_CHILD = {
+    "name": "treecycle_parent_child",
+    "head": {
+        "nodes": {
+            "P1": {"in": [0, 1, 2, 3, 4]},  # Parent 1
+            "P2": {"in": [0, 1, 2, 3, 4]},  # Parent 2 (same type)
+            "C1": {"in": [0, 1, 2, 3, 4]},  # Child 1
+            "C2": {"in": [0, 1, 2, 3, 4]},  # Child 2
+        },
+        "edges": [("P1", "C1"), ("P2", "C2")],  # Parent-child edges
+        "distinct": ["P1", "P2", "C1", "C2"]
+    },
+    "body": {
+        "nodes": {
+            "C1": {"in": [0, 1, 2, 3, 4]},
+            "C2": {"in": [0, 1, 2, 3, 4]},
+        },
+        "edges": [("C1", "C2")],  # Children are related
+        "distinct": ["C1", "C2"]
+    }
+}
+
+# TGD 2: Cycle Transitivity（环传递性）
+# If A connects to B and B connects to C (in a cycle), then A and C are related
+TGD_TREECYCLE_TRANSITIVITY = {
+    "name": "treecycle_transitivity",
+    "head": {
+        "nodes": {
+            "A": {"in": [0, 1, 2, 3, 4]},
+            "B": {"in": [0, 1, 2, 3, 4]},
+            "C": {"in": [0, 1, 2, 3, 4]},
+        },
+        "edges": [("A", "B"), ("B", "C")],  # A→B→C
+        "distinct": ["A", "B", "C"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": [0, 1, 2, 3, 4]},
+            "C": {"in": [0, 1, 2, 3, 4]},
+        },
+        "edges": [("A", "C")],  # A→C (transitivity)
+        "distinct": ["A", "C"]
+    }
+}
+
+# TGD 3: Type-Specific Hub（特定类型的枢纽）
+# If nodes of type 0 (hub type) connect to two different nodes, those nodes are related
+TGD_TREECYCLE_HUB = {
+    "name": "treecycle_hub",
+    "head": {
+        "nodes": {
+            "H": {"in": [0]},  # Hub node (type 0)
+            "A": {"in": [1, 2, 3, 4]},  # Connected node A
+            "B": {"in": [1, 2, 3, 4]},  # Connected node B
+        },
+        "edges": [("H", "A"), ("H", "B")],  # Hub connects both
+        "distinct": ["H", "A", "B"]
+    },
+    "body": {
+        "nodes": {
+            "A": {"in": [1, 2, 3, 4]},
+            "B": {"in": [1, 2, 3, 4]},
+        },
+        "edges": [("A", "B")],  # A and B are related
+        "distinct": ["A", "B"]
+    }
+}
+
+# TGD 4: Cross-Layer Bridge（跨层桥接）
+# If grandparent connects to parent, and parent connects to child, 
+# then grandparent and child are related (skip-level)
+TGD_TREECYCLE_CROSS_LAYER = {
+    "name": "treecycle_cross_layer",
+    "head": {
+        "nodes": {
+            "GP": {"in": [0, 1, 2, 3, 4]},  # Grandparent
+            "P": {"in": [0, 1, 2, 3, 4]},   # Parent
+            "C": {"in": [0, 1, 2, 3, 4]},   # Child
+        },
+        "edges": [("GP", "P"), ("P", "C")],  # GP→P→C
+        "distinct": ["GP", "P", "C"]
+    },
+    "body": {
+        "nodes": {
+            "GP": {"in": [0, 1, 2, 3, 4]},
+            "C": {"in": [0, 1, 2, 3, 4]},
+        },
+        "edges": [("GP", "C")],  # GP→C (skip parent)
+        "distinct": ["GP", "C"]
+    }
+}
+
+# TGD 5: Sibling Relation（兄弟关系）
+# If two nodes share the same parent, they are siblings (related)
+TGD_TREECYCLE_SIBLING = {
+    "name": "treecycle_sibling",
+    "head": {
+        "nodes": {
+            "P": {"in": [0, 1, 2, 3, 4]},   # Parent
+            "S1": {"in": [0, 1, 2, 3, 4]},  # Sibling 1
+            "S2": {"in": [0, 1, 2, 3, 4]},  # Sibling 2
+        },
+        "edges": [("P", "S1"), ("P", "S2")],  # Parent connects both
+        "distinct": ["P", "S1", "S2"]
+    },
+    "body": {
+        "nodes": {
+            "S1": {"in": [0, 1, 2, 3, 4]},
+            "S2": {"in": [0, 1, 2, 3, 4]},
+        },
+        "edges": [("S1", "S2")],  # Siblings are related
+        "distinct": ["S1", "S2"]
+    }
+}
+
+# Validate and register TreeCycle constraints
+CONSTRAINTS_TREECYCLE: List[TGD] = []
+validate_tgd(TGD_TREECYCLE_PARENT_CHILD)
+CONSTRAINTS_TREECYCLE.append(TGD_TREECYCLE_PARENT_CHILD)
+validate_tgd(TGD_TREECYCLE_TRANSITIVITY)
+CONSTRAINTS_TREECYCLE.append(TGD_TREECYCLE_TRANSITIVITY)
+validate_tgd(TGD_TREECYCLE_HUB)
+CONSTRAINTS_TREECYCLE.append(TGD_TREECYCLE_HUB)
+validate_tgd(TGD_TREECYCLE_CROSS_LAYER)
+CONSTRAINTS_TREECYCLE.append(TGD_TREECYCLE_CROSS_LAYER)
+validate_tgd(TGD_TREECYCLE_SIBLING)
+CONSTRAINTS_TREECYCLE.append(TGD_TREECYCLE_SIBLING)
+
+
 # Central registry by dataset key.
 _REGISTRY: Dict[str, List[TGD]] = {
     'MUTAG': CONSTRAINTS_MUTAG,
@@ -973,6 +1119,7 @@ _REGISTRY: Dict[str, List[TGD]] = {
     'BASHAPE': CONSTRAINTS_BASHAPE,
     'OGBN-PAPERS100M': CONSTRAINTS_OGBN_PAPERS,
     'OGBN_PAPERS100M': CONSTRAINTS_OGBN_PAPERS,  # Alternative key
+    'TREECYCLE': CONSTRAINTS_TREECYCLE,
     # 'ATLAS': [...],
 }
 
