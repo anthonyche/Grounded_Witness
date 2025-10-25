@@ -51,18 +51,18 @@ mkdir -p logs
 # DESCRIPTION="Medium scale (~813K nodes)"
 
 # 配置 2: 大规模（如果配置1成功，取消注释这个）
-# DEPTH=6
-# BRANCHING_FACTOR=20
-# CYCLE_PROB=0.15
-# NUM_TYPES=5
-# DESCRIPTION="Large scale (~67M nodes)"
+DEPTH=6
+BRANCHING_FACTOR=20
+CYCLE_PROB=0.15
+NUM_TYPES=5
+DESCRIPTION="Large scale (~67M nodes)"
 
  #配置 3: 超大规模（如果配置2成功，取消注释这个）
-DEPTH=6
-BRANCHING_FACTOR=25
-CYCLE_PROB=0.1
-NUM_TYPES=5
-DESCRIPTION="Very large scale (~254M nodes)"
+#DEPTH=6
+#BRANCHING_FACTOR=25
+#CYCLE_PROB=0.1
+#NUM_TYPES=5
+#DESCRIPTION="Very large scale (~254M nodes)"
 
 # 配置 4: Billion-scale（最终目标，需要更多资源）
 # DEPTH=7
