@@ -32,7 +32,7 @@ legend_elements.append(
     Line2D([0], [0], color='red', linewidth=1.2, label='Witness edges')
 )
 legend_elements.append(
-    Line2D([0], [0], color='orange', linewidth=1.2, label='Grounded edges')
+    Line2D([0], [0], color='royalblue', linewidth=1.6, linestyle='dotted', label='Grounded edges')
 )
 legend_elements.append(
     Line2D([0], [0], color="#000000", linewidth=0.6, label='Original edges')

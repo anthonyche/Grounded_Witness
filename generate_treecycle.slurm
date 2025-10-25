@@ -44,11 +44,11 @@ mkdir -p logs
 # 从小到大，逐步测试
 
 # 配置 1: 中等规模（推荐首次运行）
-DEPTH=5
-BRANCHING_FACTOR=15
-CYCLE_PROB=0.2
-NUM_TYPES=5
-DESCRIPTION="Medium scale (~813K nodes)"
+# DEPTH=5
+# BRANCHING_FACTOR=15
+# CYCLE_PROB=0.2
+# NUM_TYPES=5
+# DESCRIPTION="Medium scale (~813K nodes)"
 
 # 配置 2: 大规模（如果配置1成功，取消注释这个）
 # DEPTH=6
@@ -57,12 +57,12 @@ DESCRIPTION="Medium scale (~813K nodes)"
 # NUM_TYPES=5
 # DESCRIPTION="Large scale (~67M nodes)"
 
-# 配置 3: 超大规模（如果配置2成功，取消注释这个）
-# DEPTH=6
-# BRANCHING_FACTOR=25
-# CYCLE_PROB=0.1
-# NUM_TYPES=5
-# DESCRIPTION="Very large scale (~254M nodes)"
+ #配置 3: 超大规模（如果配置2成功，取消注释这个）
+DEPTH=6
+BRANCHING_FACTOR=25
+CYCLE_PROB=0.1
+NUM_TYPES=5
+DESCRIPTION="Very large scale (~254M nodes)"
 
 # 配置 4: Billion-scale（最终目标，需要更多资源）
 # DEPTH=7
