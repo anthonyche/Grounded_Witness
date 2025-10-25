@@ -34,7 +34,7 @@ model = GCN(
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
 # 训练参数
-epochs = 20
+epochs = 30
 for epoch in range(1, epochs+1):
     model.train()
     optimizer.zero_grad()
