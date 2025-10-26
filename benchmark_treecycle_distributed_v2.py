@@ -188,7 +188,11 @@ class Coordinator:
 
 
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue, timeout_seconds=1800):
-    """Worker 进程：运行解释算法"""
+    """Worker 进程：运行解释算法
+    
+    策略：模型在 GPU 上（用于推理），但数据保持在 CPU（避免多进程 CUDA 冲突）
+    只在模型 forward 时数据临时移到 GPU
+    """
     import sys
     import os
     import psutil
@@ -205,8 +209,13 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     mem_start = process.memory_info().rss / 1024**3
     print(f"Worker {worker_id}: Initial memory: {mem_start:.2f} GB", flush=True)
     
+    # CRITICAL: Use CPU for data, GPU only for model inference
+    # This avoids CUDA multiprocessing deadlocks with 20 workers
+    data_device = 'cpu'
+    model_device = device if device == 'cuda' and torch.cuda.is_available() else 'cpu'
+    
     try:
-        print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
+        print(f"Worker {worker_id}: Started, model_device={model_device}, data_device={data_device}, tasks={len(tasks)}", flush=True)
         sys.stdout.flush()
         
         # Import model from train_Treecycle.py
@@ -238,13 +247,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             hidden_channels=model_state['hidden_channels'],
             out_channels=model_state['out_channels']
         )
-        print(f"Worker {worker_id}: Model created, moving to {device}...")
-        model = model.to(device)
+        print(f"Worker {worker_id}: Model created, moving to {model_device}...")
+        model = model.to(model_device)
         print(f"Worker {worker_id}: Model on device, loading state dict...")
         model.load_state_dict(model_state['state_dict'])
         model.eval()
         
-        print(f"Worker {worker_id}: Model loaded and ready")
+        print(f"Worker {worker_id}: Model loaded and ready on {model_device}")
+        print(f"Worker {worker_id}: Data will stay on {data_device} (避免 CUDA 多进程冲突)", flush=True)
         
         print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
         
@@ -314,12 +324,13 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             
             print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
             
-            # Move subgraph to device
-            subgraph = task.subgraph_data.to(device)
+            # CRITICAL: Keep subgraph on CPU (data_device)
+            # Model will handle moving data to GPU during inference
+            subgraph = task.subgraph_data.to(data_device)
             target_node = subgraph.target_node
             
             # Print subgraph details for debugging
-            print(f"Worker {worker_id}: Subgraph details - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
+            print(f"Worker {worker_id}: Subgraph on {data_device} - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
             sys.stdout.flush()
             
             # Set timeout alarm
@@ -353,7 +364,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         target_node=int(target_node),
                         epochs=explainer_config.get('epochs', 100),
                         lr=explainer_config.get('lr', 0.01),
-                        device=device,
+                        device=model_device,  # Use model_device for inference
                     )
                     explanation_result = {
                         'edge_mask': gnn_result['edge_mask'],
@@ -624,13 +635,19 @@ def main():
     NUM_WORKERS = 20
     NUM_TARGETS = 100
     NUM_HOPS = 2
+    
+    # CRITICAL: Use hybrid approach
+    # - Model on GPU for inference (faster)
+    # - Data on CPU (avoid CUDA multiprocessing deadlocks)
+    # - Workers will keep data on CPU, only model forward() uses GPU
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     print(f"\nConfiguration:")
-    print(f"  Device: {DEVICE}")
+    print(f"  Device strategy: Model on {DEVICE}, Data on CPU (hybrid approach)")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Target nodes: {NUM_TARGETS}")
     print(f"  Hops: {NUM_HOPS}")
+    print(f"  Strategy: 避免 CUDA 多进程死锁，只在推理时用 GPU")
     
     # Load data
     print("\nLoading TreeCycle graph...")
