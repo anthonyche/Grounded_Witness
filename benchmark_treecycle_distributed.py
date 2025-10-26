@@ -179,6 +179,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                    result_queue, device_id=None):
     """Worker 进程：处理分配的任务"""
     import sys
+    import gc
     sys.stdout.flush()
     print(f"\n{'='*60}", flush=True)
     print(f"WORKER {worker_id}: FUNCTION ENTRY", flush=True)
@@ -199,7 +200,12 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
         # Load model
         if len(tasks) == 0:
             print(f"Worker {worker_id}: No tasks, exiting", flush=True)
-            result_queue.put((worker_id, []))
+            result_queue.put({
+                'worker_id': worker_id,
+                'num_tasks': 0,
+                'total_time': 0,
+                'results': []
+            })
             return
         
         print(f"Worker {worker_id}: Loading model...", flush=True)
@@ -249,6 +255,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
         print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
         
         results = []
+        total_time = 0
+        
         for task_idx, task in enumerate(tasks):
             print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...", flush=True)
             
@@ -263,56 +271,101 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     # Use _run method directly like OGBN
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
                     num_witnesses = len(S_k)
+                    coverage = len(Sigma_star) if Sigma_star else 0
+                    explanation_result = {
+                        'num_witnesses': num_witnesses,
+                        'coverage': coverage,
+                        'success': num_witnesses > 0
+                    }
                     
                 elif explainer_name == 'GNNExplainer':
-                    explanation = run_gnn_explainer_node(
+                    gnn_result = run_gnn_explainer_node(
                         model=model,
                         data=subgraph,
-                        target_node=target_node,
+                        target_node=int(target_node),
+                        epochs=100,
+                        lr=0.01,
                         device=device
                     )
-                    num_witnesses = explanation['edge_mask'].size(0) if explanation and explanation.get('edge_mask') is not None else 0
+                    explanation_result = {
+                        'edge_mask': gnn_result.get('edge_mask'),
+                        'pred': gnn_result.get('pred'),
+                        'success': gnn_result.get('edge_mask') is not None
+                    }
                     
                 else:
                     raise ValueError(f"Unknown explainer: {explainer_name}")
                 
                 elapsed = time.time() - start_time
+                total_time += elapsed
                 
-                print(f"Worker {worker_id}: Task {task_idx+1} done in {elapsed:.2f}s, witnesses={num_witnesses}", flush=True)
+                success_str = "✓" if explanation_result.get('success', False) else "✗"
+                if explainer_name in ['HeuChase', 'ApxChase']:
+                    witnesses = explanation_result.get('num_witnesses', 0)
+                    print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s, {witnesses} witnesses)", flush=True)
+                else:
+                    print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)", flush=True)
                 
-                results.append({
+                # Explicit garbage collection to free memory
+                del subgraph
+                gc.collect()
+                
+                result = {
                     'task_id': task.task_id,
                     'node_id': task.node_id,
                     'num_edges': task.num_edges,
-                    'num_witnesses': num_witnesses,
-                    'time': elapsed,
-                    'success': True
-                })
+                    'runtime': elapsed,
+                    'worker_id': worker_id,
+                    'explanation': explanation_result,
+                }
+                results.append(result)
                 
             except Exception as e:
                 elapsed = time.time() - start_time
+                total_time += elapsed
                 print(f"Worker {worker_id}: Error on task {task.task_id}: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
-                results.append({
+                
+                # Clean up even on error
+                try:
+                    del subgraph
+                except:
+                    pass
+                gc.collect()
+                
+                result = {
                     'task_id': task.task_id,
                     'node_id': task.node_id,
                     'num_edges': task.num_edges,
-                    'num_witnesses': 0,
-                    'time': elapsed,
-                    'success': False,
-                    'error': str(e)
-                })
+                    'runtime': elapsed,
+                    'worker_id': worker_id,
+                    'explanation': {
+                        'success': False,
+                        'error': str(e)
+                    }
+                }
+                results.append(result)
         
         print(f"Worker {worker_id}: All tasks completed, sending results...", flush=True)
-        result_queue.put((worker_id, results))
+        result_queue.put({
+            'worker_id': worker_id,
+            'num_tasks': len(tasks),
+            'total_time': total_time,
+            'results': results
+        })
         print(f"Worker {worker_id}: Results sent, exiting ✓", flush=True)
         
     except Exception as e:
         print(f"Worker {worker_id}: Fatal error: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        result_queue.put((worker_id, []))
+        result_queue.put({
+            'worker_id': worker_id,
+            'num_tasks': 0,
+            'total_time': 0,
+            'results': []
+        })
         sys.stdout.flush()
 
 
@@ -371,7 +424,10 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
     # Collect results
     all_results = []
     for _ in range(num_workers):
-        worker_id, results = result_queue.get()
+        worker_result = result_queue.get()
+        worker_id = worker_result['worker_id']
+        results = worker_result['results']
+        print(f"Coordinator: Received {len(results)} results from worker {worker_id}", flush=True)
         all_results.extend(results)
     
     # Wait for all processes
@@ -382,8 +438,8 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
     
     # Aggregate results
     total_time = extraction_time + execution_time
-    successful_tasks = [r for r in all_results if r['success']]
-    failed_tasks = [r for r in all_results if not r['success']]
+    successful_tasks = [r for r in all_results if r['explanation'].get('success', False)]
+    failed_tasks = [r for r in all_results if not r['explanation'].get('success', False)]
     
     print(f"\n{'='*70}")
     print(f"Results Summary")
@@ -397,17 +453,23 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
     print(f"  Total time: {total_time:.2f}s")
     
     if successful_tasks:
-        task_times = [r['time'] for r in successful_tasks]
+        task_times = [r['runtime'] for r in successful_tasks]
         print(f"\nPer-task time:")
         print(f"  Mean: {np.mean(task_times):.3f}s")
         print(f"  Median: {np.median(task_times):.3f}s")
         print(f"  Min/Max: {np.min(task_times):.3f}s / {np.max(task_times):.3f}s")
         
-        num_witnesses = [r['num_witnesses'] for r in successful_tasks]
-        print(f"\nWitnesses found:")
-        print(f"  Mean: {np.mean(num_witnesses):.1f}")
-        print(f"  Median: {np.median(num_witnesses):.1f}")
-        print(f"  Min/Max: {np.min(num_witnesses)} / {np.max(num_witnesses)}")
+        if explainer_name in ['HeuChase', 'ApxChase']:
+            num_witnesses = [r['explanation'].get('num_witnesses', 0) for r in successful_tasks]
+            coverage = [r['explanation'].get('coverage', 0) for r in successful_tasks]
+            print(f"\nWitnesses found:")
+            print(f"  Mean: {np.mean(num_witnesses):.1f}")
+            print(f"  Median: {np.median(num_witnesses):.1f}")
+            print(f"  Min/Max: {np.min(num_witnesses)} / {np.max(num_witnesses)}")
+            print(f"\nCoverage:")
+            print(f"  Mean: {np.mean(coverage):.1f}")
+            print(f"  Median: {np.median(coverage):.1f}")
+            print(f"  Min/Max: {np.min(coverage)} / {np.max(coverage)}")
     
     return {
         'explainer': explainer_name,
