@@ -398,7 +398,8 @@ class PGExplainerNodeCache:
         # Calling .to() again might create issues
         self.model = model.eval()
         self.full_data = _move_data_to_device(full_data, device)
-        self.device = device
+        # Ensure device is a torch.device object, not a string
+        self.device = torch.device(device) if isinstance(device, str) else device
         self.explainer = None
         self.wrapped_model = None
         self._train(epochs, lr)
