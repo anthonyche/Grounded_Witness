@@ -394,7 +394,9 @@ class PGExplainerNodeCache:
     """Cache for trained PGExplainer to avoid retraining for each node."""
     
     def __init__(self, model, full_data, device, epochs=30, lr=0.003):
-        self.model = model.to(device).eval()
+        # Don't call model.to(device) - model is already on correct device
+        # Calling .to() again might create issues
+        self.model = model.eval()
         self.full_data = _move_data_to_device(full_data, device)
         self.device = device
         self.explainer = None
