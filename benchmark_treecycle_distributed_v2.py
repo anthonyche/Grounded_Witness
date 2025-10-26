@@ -252,14 +252,52 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         model.eval()
         
         print(f"Worker {worker_id}: Model loaded and ready on {model_device}", flush=True)
+        
+        # Create a custom verify_witness function that handles device transfer
+        def verify_witness_with_device(model, v_t, Gs):
+            """Wrapper that moves subgraph to model's device for verification"""
+            model.eval()
+            with torch.no_grad():
+                # Move subgraph to model's device temporarily
+                Gs_gpu = Gs.to(next(model.parameters()).device)
+                
+                # Determine model type
+                model_class_name = model.__class__.__name__
+                is_node_model = (hasattr(Gs_gpu, 'task') and Gs_gpu.task == 'node') or \
+                               any(name in model_class_name for name in ['GCN', 'GAT', 'SAGE'])
+                
+                # Run model
+                if is_node_model:
+                    out = model(Gs_gpu.x, Gs_gpu.edge_index)
+                else:
+                    out = model(Gs_gpu)
+                
+                # Check factual correctness
+                if hasattr(Gs_gpu, 'task') and Gs_gpu.task == 'node' and v_t is not None:
+                    y_ref = getattr(Gs_gpu, 'y_ref', None)
+                    if y_ref is None:
+                        return True
+                    
+                    target_subgraph_id = getattr(Gs_gpu, '_target_node_subgraph_id', 0)
+                    if out.dim() > 1 and out.size(-1) > 1:
+                        y_hat = out.argmax(dim=-1)
+                        return bool((y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).item())
+                    else:
+                        y_hat = out.argmax(dim=-1) if out.dim() > 1 else (out > 0).long()
+                        return bool((y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).item())
+                
+                # Default: pass if no y_ref
+                return True
+        
+        print(f"Worker {worker_id}: Custom verify_witness created (handles device transfer)", flush=True)
 
-        print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
+        print(f"Worker {worker_id}: Initializing {explainer_name} explainer...", flush=True)
 
         # Initialize explainer (import inside worker to avoid multiprocessing issues)
         if explainer_name == 'heuchase':
-            print(f"Worker {worker_id}: Importing HeuChase...")
+            print(f"Worker {worker_id}: Importing HeuChase...", flush=True)
             from heuchase import HeuChase
-            print(f"Worker {worker_id}: Creating HeuChase...")
+            print(f"Worker {worker_id}: Creating HeuChase...", flush=True)
             explainer = HeuChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
@@ -268,38 +306,41 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 B=explainer_config.get('B', 5),
                 m=explainer_config.get('m', 6),
                 noise_std=explainer_config.get('noise_std', 1e-3),
+                verify_witness_fn=verify_witness_with_device,  # Use custom function
                 debug=False,
             )
-            print(f"Worker {worker_id}: HeuChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)}, m={explainer_config.get('m', 6)})")
+            print(f"Worker {worker_id}: HeuChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)}, m={explainer_config.get('m', 6)})", flush=True)
 
         elif explainer_name == 'apxchase':
-            print(f"Worker {worker_id}: Importing ApxChase...")
+            print(f"Worker {worker_id}: Importing ApxChase...", flush=True)
             from apxchase import ApxChase
-            print(f"Worker {worker_id}: Creating ApxChase...")
+            print(f"Worker {worker_id}: Creating ApxChase...", flush=True)
             explainer = ApxChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
                 B=explainer_config.get('B', 5),
+                verify_witness_fn=verify_witness_with_device,  # Use custom function
                 debug=False,
             )
-            print(f"Worker {worker_id}: ApxChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})")
+            print(f"Worker {worker_id}: ApxChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})", flush=True)
 
         elif explainer_name == 'exhaustchase':
-            print(f"Worker {worker_id}: Importing ExhaustChase...")
+            print(f"Worker {worker_id}: Importing ExhaustChase...", flush=True)
             from exhaustchase import ExhaustChase
-            print(f"Worker {worker_id}: Creating ExhaustChase...")
+            print(f"Worker {worker_id}: Creating ExhaustChase...", flush=True)
             explainer = ExhaustChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
                 B=explainer_config.get('B', 5),
+                verify_witness_fn=verify_witness_with_device,  # Use custom function
                 debug=False,
                 max_enforce_iterations=explainer_config.get('max_enforce_iterations', 50),
             )
-            print(f"Worker {worker_id}: ExhaustChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})")
+            print(f"Worker {worker_id}: ExhaustChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})", flush=True)
 
         elif explainer_name == 'gnnexplainer':
             print(f"Worker {worker_id}: GNNExplainer uses baseline function (no init needed)")
