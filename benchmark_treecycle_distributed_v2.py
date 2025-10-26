@@ -190,8 +190,7 @@ class Coordinator:
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue, timeout_seconds=1800):
     """Worker 进程：运行解释算法
     
-    策略：模型在 GPU 上（用于推理），但数据保持在 CPU（避免多进程 CUDA 冲突）
-    只在模型 forward 时数据临时移到 GPU
+    与 OGBN 一致：模型和数据都在 CPU 上（避免 CUDA 多进程死锁）
     """
     import sys
     import os
@@ -209,13 +208,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     mem_start = process.memory_info().rss / 1024**3
     print(f"Worker {worker_id}: Initial memory: {mem_start:.2f} GB", flush=True)
     
-    # CRITICAL: Use CPU for data, GPU only for model inference
-    # This avoids CUDA multiprocessing deadlocks with 20 workers
-    data_device = 'cpu'
-    model_device = device if device == 'cuda' and torch.cuda.is_available() else 'cpu'
-    
     try:
-        print(f"Worker {worker_id}: Started, model_device={model_device}, data_device={data_device}, tasks={len(tasks)}", flush=True)
+        print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
         sys.stdout.flush()
         
         # Import model from train_Treecycle.py
@@ -237,52 +231,72 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 x = self.conv2(x, edge_index)
                 return x
         
-        # Wrapper to handle CPU data with GPU model
-        class HybridGCN(torch.nn.Module):
-            """Wrapper that automatically moves data to model device for inference"""
-            def __init__(self, base_model, model_device, data_device):
-                super().__init__()
-                self.base_model = base_model
-                self.model_device = model_device
-                self.data_device = data_device
-            
-            def forward(self, x, edge_index):
-                # Move data to model device
-                x = x.to(self.model_device)
-                edge_index = edge_index.to(self.model_device)
-                
-                # Run inference on model device
-                out = self.base_model(x, edge_index)
-                
-                # Move result back to data device
-                out = out.to(self.data_device)
-                return out
-            
-            def __call__(self, x, edge_index):
-                return self.forward(x, edge_index)
-        
         print(f"Worker {worker_id}: Model class loaded ✓", flush=True)
         sys.stdout.flush()
         
-        # Create base model
+        # Create model
         print(f"Worker {worker_id}: Creating model...")
-        base_model = GCN(
+        model = GCN(
             in_channels=model_state['in_channels'],
             hidden_channels=model_state['hidden_channels'],
             out_channels=model_state['out_channels']
         )
-        print(f"Worker {worker_id}: Model created, moving to {model_device}...")
-        base_model = base_model.to(model_device)
+        print(f"Worker {worker_id}: Model created, moving to {device}...")
+        model = model.to(device)
         print(f"Worker {worker_id}: Model on device, loading state dict...")
-        base_model.load_state_dict(model_state['state_dict'])
-        base_model.eval()
+        model.load_state_dict(model_state['state_dict'])
+        model.eval()
         
-        # Wrap model for hybrid CPU/GPU operation
-        model = HybridGCN(base_model, model_device, data_device)
-        print(f"Worker {worker_id}: Model wrapped with HybridGCN (auto data transfer)")
+        print(f"Worker {worker_id}: Model loaded and ready")
         
-        print(f"Worker {worker_id}: Model loaded and ready on {model_device}")
-        print(f"Worker {worker_id}: Data will stay on {data_device} (避免 CUDA 多进程冲突)", flush=True)
+        # Create custom verify_witness function for GPU inference
+        def verify_witness_with_gpu(model_fn, v_t, Gs):
+            """
+            Custom verify function: data on CPU, inference on GPU
+            Only model forward() uses GPU, all other operations on CPU
+            """
+            model_fn.eval()
+            
+            # Get model device
+            model_device = next(model_fn.parameters()).device
+            
+            with torch.no_grad():
+                # Move data to model device temporarily
+                x_gpu = Gs.x.to(model_device)
+                edge_index_gpu = Gs.edge_index.to(model_device)
+                
+                # Run inference on GPU
+                out_gpu = model_fn(x_gpu, edge_index_gpu)
+                
+                # Move result back to CPU immediately
+                out = out_gpu.cpu()
+                
+                # All verification logic on CPU
+                factual_ok = False
+                if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
+                    y_ref = getattr(Gs, 'y_ref', None)
+                    if y_ref is None:
+                        factual_ok = True
+                    else:
+                        target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
+                        if out.dim() > 1 and out.size(-1) > 1:
+                            y_hat = (torch.sigmoid(out) > 0.5).float()
+                            factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).all().item()
+                        else:
+                            y_hat = out.argmax(dim=-1)
+                            factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).item()
+                else:
+                    # Graph classification
+                    y_hat = out.argmax(dim=-1)
+                    y_ref = getattr(Gs, 'y_ref', None)
+                    if y_ref is None:
+                        factual_ok = True
+                    else:
+                        factual_ok = (y_ref[0] == y_hat[0]).item()
+                
+                return factual_ok
+        
+        print(f"Worker {worker_id}: Custom verify_witness_with_gpu created")
         
         print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
         
@@ -297,9 +311,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 B=explainer_config.get('B', 8),
                 m=explainer_config.get('m', 6),
                 noise_std=explainer_config.get('noise_std', 1e-3),
+                verify_witness_fn=verify_witness_with_gpu if device != 'cpu' else None,
                 debug=False,
             )
-            print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)})")
+            print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)}, GPU verification={device != 'cpu'})")
             
         elif explainer_name == 'apxchase':
             print(f"Worker {worker_id}: Creating ApxChase...")
@@ -352,13 +367,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             
             print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
             
-            # CRITICAL: Keep subgraph on CPU (data_device)
-            # Model will handle moving data to GPU during inference
-            subgraph = task.subgraph_data.to(data_device)
+            # CRITICAL: Keep subgraph on CPU (避免 CUDA 多进程冲突)
+            # Model inference will temporarily move data to GPU if needed
+            subgraph = task.subgraph_data.to('cpu')
             target_node = subgraph.target_node
             
             # Print subgraph details for debugging
-            print(f"Worker {worker_id}: Subgraph on {data_device} - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
+            print(f"Worker {worker_id}: Subgraph on CPU - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
+            print(f"Worker {worker_id}: Model on {device}, inference will use GPU if device=cuda", flush=True)
             sys.stdout.flush()
             
             # Set timeout alarm
@@ -392,7 +408,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         target_node=int(target_node),
                         epochs=explainer_config.get('epochs', 100),
                         lr=explainer_config.get('lr', 0.01),
-                        device=model_device,  # Use model_device for inference
+                        device=device,
                     )
                     explanation_result = {
                         'edge_mask': gnn_result['edge_mask'],
@@ -652,19 +668,25 @@ def main():
     NUM_TARGETS = 100
     NUM_HOPS = 2
     
-    # CRITICAL: Use hybrid approach
-    # - Model on GPU for inference (faster)
-    # - Data on CPU (avoid CUDA multiprocessing deadlocks)
-    # - Workers will keep data on CPU, only model forward() uses GPU
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Device strategy:
+    # - Data/Graph operations: Always CPU (avoid CUDA multiprocessing deadlock)
+    # - Model inference: Use GPU if available (custom verify function handles data transfer)
+    USE_GPU_FOR_INFERENCE = True  # Set to False to use pure CPU
     
-    print(f"\nConfiguration:")
-    print(f"  Device strategy: Model on {DEVICE}, Data on CPU (hybrid approach)")
+    if USE_GPU_FOR_INFERENCE and torch.cuda.is_available():
+        DEVICE = 'cuda'
+        print(f"\nConfiguration:")
+        print(f"  Device: CUDA (GPU only for model inference)")
+        print(f"  Strategy: Data on CPU, model inference on GPU")
+    else:
+        DEVICE = 'cpu'
+        print(f"\nConfiguration:")
+        print(f"  Device: CPU (all operations)")
+    
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Target nodes: {NUM_TARGETS}")
     print(f"  Hops: {NUM_HOPS}")
     print(f"  Cache directory: {CACHE_DIR}")
-    print(f"  Strategy: 避免 CUDA 多进程死锁，只在推理时用 GPU")
     
     # Create cache directory
     os.makedirs(CACHE_DIR, exist_ok=True)
