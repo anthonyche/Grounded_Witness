@@ -205,8 +205,17 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
             
             try:
                 if explainer_name == 'HeuChase':
-                    explainer = HeuChase(model, subgraph, constraints, device=device)
-                    witness_edges = explainer.explain_node(target_node)
+                    explainer = HeuChase(
+                        model=model,
+                        Sigma=constraints,
+                        L=2,  # num_hops
+                        k=10,  # window size
+                        B=100,  # budget
+                        m=6,  # number of Edmonds candidates
+                        noise_std=1e-3,
+                        debug=False
+                    )
+                    witness_edges = explainer.explain_node(subgraph, target_node)
                     num_witnesses = len(witness_edges) if witness_edges else 0
                     
                 elif explainer_name == 'ApxChase':
