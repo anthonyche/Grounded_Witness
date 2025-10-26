@@ -440,10 +440,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     # Import run_pgexplainer_node inside worker
                     from baselines import run_pgexplainer_node
                     
+                    # PGExplainer needs data on the same device as model for training
+                    # Move subgraph to model's device
+                    subgraph_for_pg = subgraph.to(model_device)
+                    
                     # Use cached PGExplainer (trains once on first call per worker)
                     pg_result = run_pgexplainer_node(
                         model=model,
-                        data=subgraph,
+                        data=subgraph_for_pg,  # Data on GPU
                         target_node=int(target_node),
                         epochs=explainer_config.get('train_epochs', 30),
                         lr=explainer_config.get('train_lr', 0.003),
@@ -694,11 +698,11 @@ def main():
         print(f"  Device memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
     
     # Configuration
-    DATA_PATH = 'datasets/TreeCycle/treecycle_d5_bf15_n813616.pt'
-    MODEL_PATH = 'models/TreeCycle_gcn_model.pth'
+    DATA_PATH = 'datasets/TreeCycle/treecycle_d5_bf15_n813616.pt'  # Small graph for testing
+    MODEL_PATH = 'models/TreeCycle_gcn_d5_bf15_n813616.pth'
     CACHE_DIR = 'cache/treecycle'
-    NUM_WORKERS = 20
-    NUM_TARGETS = 100
+    NUM_WORKERS = 4  # Reduced for testing (match 4 GPUs)
+    NUM_TARGETS = 20  # Reduced for testing
     NUM_HOPS = 2
     
     # Device strategy: Hybrid CPU/GPU (model on GPU, computation on CPU)
