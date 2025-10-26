@@ -432,10 +432,12 @@ class PGExplainerNodeCache:
         
         # Train on multiple nodes from the full graph
         num_train_nodes = min(100, self.full_data.x.size(0) // 2)
-        train_indices = torch.randperm(self.full_data.x.size(0))[:num_train_nodes]
+        # Create train_indices on the same device as the data
+        train_indices = torch.randperm(self.full_data.x.size(0), device=self.device)[:num_train_nodes]
         
         print(f"[PGExplainer] Training once on {self.full_data.x.size(0)} nodes, {self.full_data.edge_index.size(1)} edges")
         print(f"[PGExplainer] Training with {num_train_nodes} sample nodes")
+        print(f"[PGExplainer] Device check: x={self.full_data.x.device}, edge_index={self.full_data.edge_index.device}, y={self.full_data.y.device}, model={next(self.model.parameters()).device}")
         
         for epoch in range(1, epochs + 1):
             for idx in train_indices:
