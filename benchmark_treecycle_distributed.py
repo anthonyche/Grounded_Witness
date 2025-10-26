@@ -131,13 +131,10 @@ class Coordinator:
             target_node=mapping.item(),
         )
         
-        # Set required attributes for ApxChase/HeuChase
+        # Mark as node classification task (same as OGBN)
         subgraph.task = 'node'
         subgraph.root = mapping.item()
         subgraph._target_node_subgraph_id = mapping.item()
-        subgraph._nodes_in_full = subset.clone()  # Required by ApxChase for repair cost
-        subgraph.num_nodes = subset.size(0)
-        subgraph.E_base = edge_index.size(1)
         
         num_edges = edge_index.size(1)
         return subgraph, num_edges
@@ -244,14 +241,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
             explainer = HeuChase(
                 model=model,
                 Sigma=constraints,
-                L=2,
-                k=10,
-                B=100,
-                m=6,
+                L=2,  # 2-hop subgraph
+                k=10,  # Keep top-10 witnesses
+                B=8,   # Budget for HEAD matching (same as OGBN!)
+                m=6,   # Max candidates per step
                 noise_std=1e-3,
                 debug=False
             )
-            print(f"Worker {worker_id}: HeuChase initialized ✓", flush=True)
+            print(f"Worker {worker_id}: HeuChase initialized ✓ (B=8)", flush=True)
             
         elif explainer_name == 'ApxChase':
             explainer = ApxChase(
@@ -259,10 +256,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 Sigma=constraints,
                 L=2,
                 k=10,
-                B=100,
+                B=8,   # Budget for HEAD matching (same as OGBN!)
                 debug=False
             )
-            print(f"Worker {worker_id}: ApxChase initialized ✓", flush=True)
+            print(f"Worker {worker_id}: ApxChase initialized ✓ (B=8)", flush=True)
             
         elif explainer_name == 'ExhaustChase':
             explainer = ExhaustChase(
@@ -270,11 +267,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 Sigma=constraints,
                 L=2,
                 k=10,
-                B=100,
+                B=8,   # Budget for HEAD matching (same as OGBN!)
                 debug=False,
-                max_enforce_iterations=100
+                max_enforce_iterations=50  # Exhaustive is still slow, keep at 50
             )
-            print(f"Worker {worker_id}: ExhaustChase initialized ✓", flush=True)
+            print(f"Worker {worker_id}: ExhaustChase initialized ✓ (B=8, MaxIter=50)", flush=True)
             
         elif explainer_name == 'PGExplainer':
             # PGExplainer needs training first - skip for now or use quick_fit
@@ -282,6 +279,9 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
             print(f"Worker {worker_id}: PGExplainer (per-task initialization)", flush=True)
         
         print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
+        
+        # Set up signal handler once (not per task)
+        signal.signal(signal.SIGALRM, timeout_handler)
         
         results = []
         total_time = 0
@@ -297,13 +297,16 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
             timed_out = False
             
             # Set timeout alarm (30 minutes = 1800 seconds)
-            signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
             
             try:
                 if explainer_name in ['HeuChase', 'ApxChase', 'ExhaustChase']:
                     # Use _run method directly like OGBN
+                    print(f"Worker {worker_id}: Calling {explainer_name}._run() on subgraph with {subgraph.num_nodes if hasattr(subgraph, 'num_nodes') else subgraph.x.size(0)} nodes, {subgraph.edge_index.size(1)} edges...", flush=True)
+                    run_start = time.time()
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
+                    run_elapsed = time.time() - run_start
+                    print(f"Worker {worker_id}: {explainer_name}._run() completed in {run_elapsed:.2f}s, found {len(S_k)} witnesses", flush=True)
                     num_witnesses = len(S_k)
                     coverage = len(Sigma_star) if Sigma_star else 0
                     explanation_result = {
