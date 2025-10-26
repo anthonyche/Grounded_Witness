@@ -2,12 +2,57 @@
 #SBATCH --job-name=treecycle_bench
 #SBATCH --output=logs/treecycle_bench_%j.out
 #SBATCH --error=logs/treecycle_bench_%j.err
-#SBATCH --time=04:00:00
-#SBATCH --partition=cpu
+#SBATCH --time=12:00:00
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=32G
+#SBATCH --mem=128G
+#SBATCH --nodes=1
 
+echo "=================================================="
+echo "TreeCycle Distributed Benchmark"
+echo "=================================================="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "Start time: $(date)"
+echo "=================================================="
+
+# Load environment
 module load Miniconda3
 source activate skyexp
 
+echo "Python version:"
+python --version
+
+echo ""
+echo "System info:"
+echo "  CPUs: $(nproc)"
+echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
+echo "  GPUs: $CUDA_VISIBLE_DEVICES"
+
+# Create output directories
+mkdir -p results
+mkdir -p logs
+
+echo ""
+echo "=================================================="
+echo "Configuration"
+echo "=================================================="
+echo "Dataset: TreeCycle (d5_bf15_n813616)"
+echo "Model: TreeCycle_gcn_d5_bf15_n813616.pth"
+echo "Workers: 20"
+echo "Target nodes: 100"
+echo "Hops: 2"
+echo "Explainers: HeuChase, ApxChase, GNNExplainer"
+echo "=================================================="
+
+# Run benchmark
+echo ""
+echo "Starting benchmark..."
 python benchmark_treecycle_distributed.py
+
+echo ""
+echo "=================================================="
+echo "Benchmark completed"
+echo "End time: $(date)"
+echo "=================================================="
