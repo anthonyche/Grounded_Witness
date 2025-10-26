@@ -30,6 +30,24 @@ echo "  CPUs: $(nproc)"
 echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
 echo "  GPUs: $CUDA_VISIBLE_DEVICES"
 
+# Set environment variables for CUDA and multiprocessing
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export PYTHONUNBUFFERED=1
+export CUDA_LAUNCH_BLOCKING=1
+
+echo ""
+echo "Environment variables:"
+echo "  OMP_NUM_THREADS: $OMP_NUM_THREADS"
+echo "  MKL_NUM_THREADS: $MKL_NUM_THREADS"
+echo "  PYTHONUNBUFFERED: $PYTHONUNBUFFERED"
+echo "  CUDA_LAUNCH_BLOCKING: $CUDA_LAUNCH_BLOCKING"
+
+# Check GPU
+echo ""
+echo "GPU Check:"
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+
 # Create output directories
 mkdir -p results
 mkdir -p logs
@@ -50,7 +68,7 @@ echo "=================================================="
 # Run benchmark
 echo ""
 echo "Starting benchmark..."
-python benchmark_treecycle_distributed.py
+python benchmark_treecycle_distributed_v2.py
 
 echo ""
 echo "=================================================="
