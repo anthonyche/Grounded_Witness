@@ -119,9 +119,13 @@ class Coordinator:
             target_node=mapping.item(),
         )
         
+        # Set required attributes for ApxChase/HeuChase
         subgraph.task = 'node'
         subgraph.root = mapping.item()
         subgraph._target_node_subgraph_id = mapping.item()
+        subgraph._nodes_in_full = subset.clone()  # Required by ApxChase for repair cost
+        subgraph.num_nodes = subset.size(0)
+        subgraph.E_base = edge_index.size(1)
         
         num_edges = edge_index.size(1)
         return subgraph, num_edges
@@ -225,6 +229,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 noise_std=1e-3,
                 debug=False
             )
+            # Set clean graph for repair cost calculation (use original data)
+            # explainer._H_clean will be set per task
             print(f"Worker {worker_id}: HeuChase initialized ✓", flush=True)
             
         elif explainer_name == 'ApxChase':
@@ -236,16 +242,19 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 B=100,
                 debug=False
             )
+            # Set clean graph for repair cost calculation
+            # explainer._H_clean will be set per task
             print(f"Worker {worker_id}: ApxChase initialized ✓", flush=True)
         
         print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
         
         results = []
         for task_idx, task in enumerate(tasks):
-            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id})...", flush=True)
+            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...", flush=True)
             
             subgraph = task.subgraph_data.to(device)
             target_node = subgraph.target_node
+            print(f"Worker {worker_id}: Subgraph moved to device, running explainer...", flush=True)
             
             start_time = time.time()
             
