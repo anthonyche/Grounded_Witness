@@ -241,9 +241,9 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         # Create model
         print(f"Worker {worker_id}: Creating model...", flush=True)
         model = GCN(
-            in_channels=model_state['in_channels'],
-            hidden_channels=model_state['hidden_channels'],
-            out_channels=model_state['out_channels']
+            in_channels=model_state['input_dim'],
+            hidden_channels=model_state['hidden_dim'],
+            out_channels=model_state['output_dim']
         )
         print(f"Worker {worker_id}: Model created, moving to {model_device}...", flush=True)
         model = model.to(model_device)
@@ -362,8 +362,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             explainer = None
 
         elif explainer_name == 'pgexplainer':
-            print(f"Worker {worker_id}: PGExplainer (skip - needs training)")
-            explainer = None
+            print(f"Worker {worker_id}: PGExplainer (uses cached training)", flush=True)
+            # PGExplainer uses lazy training - trains once per worker on first use
+            # The training will happen automatically in run_pgexplainer_node
+            explainer = None  # Not needed, use function directly
+            print(f"Worker {worker_id}: PGExplainer will train on first node", flush=True)
         else:
             raise ValueError(f"Unknown explainer: {explainer_name}")
 
@@ -434,10 +437,23 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     }
                     
                 elif explainer_name == 'pgexplainer':
-                    # Skip PGExplainer (needs training)
+                    # Import run_pgexplainer_node inside worker
+                    from baselines import run_pgexplainer_node
+                    
+                    # Use cached PGExplainer (trains once on first call per worker)
+                    pg_result = run_pgexplainer_node(
+                        model=model,
+                        data=subgraph,
+                        target_node=int(target_node),
+                        epochs=explainer_config.get('train_epochs', 30),
+                        lr=explainer_config.get('train_lr', 0.003),
+                        device=model_device,  # Use model's device
+                        use_cache=True,  # Enable caching to avoid retraining
+                    )
                     explanation_result = {
-                        'success': False,
-                        'reason': 'PGExplainer requires training, skipped'
+                        'edge_mask': pg_result.get('edge_mask'),
+                        'pred': pg_result.get('pred'),
+                        'success': pg_result.get('edge_mask') is not None
                     }
                     
             except Exception as e:
@@ -522,18 +538,31 @@ def run_distributed_benchmark(model_path, tasks, explainer_name,
         print("Loading TreeCycle model...")
         checkpoint = torch.load(model_path, map_location='cpu')
         
-        # Get model dimensions from first task
-        sample_task = tasks[0]
-        in_channels = sample_task.subgraph_data.x.size(1)
-        out_channels = len(torch.unique(sample_task.subgraph_data.y))
-        hidden_channels = 32  # From train_Treecycle.py
-        
-        model_state = {
-            'state_dict': checkpoint,
-            'in_channels': in_channels,
-            'hidden_channels': hidden_channels,
-            'out_channels': out_channels
-        }
+        # Check if checkpoint has metadata or is just state_dict
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            # New format with metadata
+            model_state = {
+                'state_dict': checkpoint['model_state_dict'],
+                'input_dim': checkpoint['input_dim'],
+                'hidden_dim': checkpoint['hidden_dim'],
+                'output_dim': checkpoint['output_dim']
+            }
+            in_channels = checkpoint['input_dim']
+            hidden_channels = checkpoint['hidden_dim']
+            out_channels = checkpoint['output_dim']
+        else:
+            # Old format: just state_dict, infer dimensions
+            sample_task = tasks[0]
+            in_channels = sample_task.subgraph_data.x.size(1)
+            out_channels = len(torch.unique(sample_task.subgraph_data.y))
+            hidden_channels = 32  # Default from train_Treecycle.py
+            
+            model_state = {
+                'state_dict': checkpoint,
+                'input_dim': in_channels,
+                'hidden_dim': hidden_channels,
+                'output_dim': out_channels
+            }
         
         print(f"  Model loaded (in={in_channels}, hidden={hidden_channels}, out={out_channels})")
         
@@ -666,7 +695,7 @@ def main():
     
     # Configuration
     DATA_PATH = 'datasets/TreeCycle/treecycle_d5_bf15_n813616.pt'
-    MODEL_PATH = 'models/TreeCycle_gcn_d5_bf15_n813616.pth'
+    MODEL_PATH = 'models/TreeCycle_gcn_model.pth'
     CACHE_DIR = 'cache/treecycle'
     NUM_WORKERS = 20
     NUM_TARGETS = 100
@@ -785,7 +814,8 @@ def main():
             'lr': 0.01,
         },
         'pgexplainer': {
-            # Skipped - needs training
+            'train_epochs': 30,  # Training epochs
+            'train_lr': 0.003,   # Training learning rate
         }
     }
     
