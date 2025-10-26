@@ -8,6 +8,7 @@ Distributed Explainability Benchmark on TreeCycle Graph
 
 import torch
 import torch.multiprocessing as mp
+torch.multiprocessing.set_start_method('spawn', force=True)
 import numpy as np
 import time
 import heapq
@@ -16,7 +17,6 @@ import os
 import psutil
 import signal
 import gc
-import queue  # for Queue timeouts
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
@@ -188,7 +188,7 @@ class Coordinator:
         return task_assignments, load_stats
 
 
-def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, infer_device, result_queue, timeout_seconds=1800, print_every=5):
+def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue, timeout_seconds=1800, infer_device='cpu'):
     """Worker 进程：运行解释算法
     
     与 OGBN 一致：模型和数据都在 CPU 上（避免 CUDA 多进程死锁）
@@ -203,6 +203,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     print(f"WORKER {worker_id}: FUNCTION ENTRY (PID: {os.getpid()})", flush=True)
     print(f"{'='*60}\n", flush=True)
     sys.stdout.flush()
+    # Hard block CUDA if infer_device is CPU (avoid accidental CUDA init in forks)
+    if infer_device == 'cpu':
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    torch.set_num_threads(1)
     
     # Monitor memory
     process = psutil.Process(os.getpid())
@@ -212,7 +216,6 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     try:
         print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
         sys.stdout.flush()
-        torch.set_num_threads(1)  # avoid CPU oversubscription in workers
         
         # Import model from train_Treecycle.py
         print(f"Worker {worker_id}: Importing GCN model class...", flush=True)
@@ -243,37 +246,44 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             hidden_channels=model_state['hidden_channels'],
             out_channels=model_state['out_channels']
         )
-        print(f"Worker {worker_id}: Model created (stays on CPU); loading state dict...")
+        print(f"Worker {worker_id}: Model created, moving to {device}...")
+        model = model.to(device)
+        print(f"Worker {worker_id}: Model on device, loading state dict...")
         model.load_state_dict(model_state['state_dict'])
         model.eval()
-        # Prepare a separate inference copy on GPU if requested
-        if infer_device == 'cuda' and torch.cuda.is_available():
-            print(f"Worker {worker_id}: Creating GPU inference copy...")
-            model_infer = type(model)(
+        
+        print(f"Worker {worker_id}: Model loaded and ready")
+        # Optionally create a CUDA copy only if explicitly requested
+        use_gpu_infer = (infer_device != 'cpu') and torch.cuda.is_available()
+        if use_gpu_infer:
+            print(f"Worker {worker_id}: Creating CUDA inference copy...")
+            model_infer = GCN(
                 in_channels=model_state['in_channels'],
                 hidden_channels=model_state['hidden_channels'],
                 out_channels=model_state['out_channels']
-            )
+            ).to(infer_device)
             model_infer.load_state_dict(model_state['state_dict'])
-            model_infer = model_infer.to('cuda').eval()
-            print(f"Worker {worker_id}: GPU inference copy ready")
+            model_infer.eval()
+            print(f"Worker {worker_id}: CUDA inference copy ready on {infer_device}")
         else:
-            model_infer = model  # CPU inference
+            model_infer = None
+            print(f"Worker {worker_id}: Using pure-CPU inference")
 
-        # Create custom verify_witness function for GPU/CPU inference
-        def verify_witness_with_gpu(model_fn, v_t, Gs):
+        # Create custom verify_witness function for GPU inference
+        def verify_witness_with_gpu(model_infer, v_t, Gs):
             """
-            Run forward on the model device (CPU or single-GPU copy); keep all other logic on CPU.
+            Custom verify function: data on CPU, inference on GPU
+            Only model forward() uses GPU, all other operations on CPU
             """
-            model_fn.eval()
-            model_device = next(model_fn.parameters()).device
+            if model_infer is None:
+                raise RuntimeError("GPU verify requested but model_infer is None")
+            model_infer.eval()
+            model_device = next(model_infer.parameters()).device
             with torch.no_grad():
-                # Move data to model device temporarily
-                x_dev = Gs.x.to(model_device, non_blocking=True)
-                edge_index_dev = Gs.edge_index.to(model_device, non_blocking=True)
-                out_dev = model_fn(x_dev, edge_index_dev)
-                out = out_dev.detach().cpu()
-                # Verification on CPU
+                x_gpu = Gs.x.to(model_device, non_blocking=True)
+                edge_index_gpu = Gs.edge_index.to(model_device, non_blocking=True)
+                out_gpu = model_infer(x_gpu, edge_index_gpu)
+                out = out_gpu.cpu()
                 factual_ok = False
                 if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
                     y_ref = getattr(Gs, 'y_ref', None)
@@ -288,17 +298,23 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                             y_hat = out.argmax(dim=-1)
                             factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).item()
                 else:
+                    # Graph classification
                     y_hat = out.argmax(dim=-1)
                     y_ref = getattr(Gs, 'y_ref', None)
-                    factual_ok = True if y_ref is None else (y_ref[0] == y_hat[0]).item()
+                    if y_ref is None:
+                        factual_ok = True
+                    else:
+                        factual_ok = (y_ref[0] == y_hat[0]).item()
                 return factual_ok
+
         print(f"Worker {worker_id}: Custom verify_witness_with_gpu created")
-        
+
         print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
-        
+
         # Initialize explainer
         if explainer_name == 'heuchase':
             print(f"Worker {worker_id}: Creating HeuChase...")
+            verify_fn = (lambda m, vt, Gs: verify_witness_with_gpu(model_infer, vt, Gs)) if use_gpu_infer else None
             explainer = HeuChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
@@ -307,48 +323,50 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 B=explainer_config.get('B', 8),
                 m=explainer_config.get('m', 6),
                 noise_std=explainer_config.get('noise_std', 1e-3),
-                verify_witness_fn=(lambda m, v, g: verify_witness_with_gpu(model_infer, v, g)),
+                verify_witness_fn=verify_fn,
                 debug=False,
             )
-            print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)}, GPU/CPU verification)")
+            print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)}, GPU verification={use_gpu_infer})")
 
         elif explainer_name == 'apxchase':
             print(f"Worker {worker_id}: Creating ApxChase...")
+            verify_fn = (lambda m, vt, Gs: verify_witness_with_gpu(model_infer, vt, Gs)) if use_gpu_infer else None
             explainer = ApxChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
                 B=explainer_config.get('B', 8),
-                verify_witness_fn=(lambda m, v, g: verify_witness_with_gpu(model_infer, v, g)),
                 debug=False,
+                verify_witness_fn=verify_fn,
             )
-            print(f"Worker {worker_id}: ApxChase initialized (B={explainer_config.get('B', 8)})")
+            print(f"Worker {worker_id}: ApxChase initialized (B={explainer_config.get('B', 8)}, GPU verification={use_gpu_infer})")
 
         elif explainer_name == 'exhaustchase':
             print(f"Worker {worker_id}: Creating ExhaustChase...")
+            verify_fn = (lambda m, vt, Gs: verify_witness_with_gpu(model_infer, vt, Gs)) if use_gpu_infer else None
             explainer = ExhaustChase(
                 model=model,
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
                 B=explainer_config.get('B', 8),
-                verify_witness_fn=(lambda m, v, g: verify_witness_with_gpu(model_infer, v, g)),
                 debug=False,
                 max_enforce_iterations=explainer_config.get('max_enforce_iterations', 50),
+                verify_witness_fn=verify_fn,
             )
-            print(f"Worker {worker_id}: ExhaustChase initialized (B={explainer_config.get('B', 8)})")
-            
+            print(f"Worker {worker_id}: ExhaustChase initialized (B={explainer_config.get('B', 8)}, GPU verification={use_gpu_infer})")
+
         elif explainer_name == 'gnnexplainer':
             print(f"Worker {worker_id}: GNNExplainer uses baseline function")
             explainer = None
-            
+
         elif explainer_name == 'pgexplainer':
             print(f"Worker {worker_id}: PGExplainer (skip - needs training)")
             explainer = None
         else:
             raise ValueError(f"Unknown explainer: {explainer_name}")
-        
+
         print(f"Worker {worker_id}: ✓ Explainer ready, starting {len(tasks)} tasks")
         
         # Set up signal handler for timeout
@@ -362,35 +380,32 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         for task_idx, task in enumerate(tasks):
             start_time = time.time()
             timed_out = False
-
-            if (task_idx % print_every) == 0:
-                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...", flush=True)
-
+            
+            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
+            
             # CRITICAL: Keep subgraph on CPU (避免 CUDA 多进程冲突)
             # Model inference will temporarily move data to GPU if needed
             subgraph = task.subgraph_data.to('cpu')
             target_node = subgraph.target_node
-
-            # Reduce per-task logging
-            #if (task_idx % print_every) == 0:
-            #    print(f"Worker {worker_id}: Subgraph on CPU - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
-            #    print(f"Worker {worker_id}: Model on {device}, inference will use GPU if device=cuda", flush=True)
+            
+            # Print subgraph details for debugging
+            print(f"Worker {worker_id}: Subgraph on CPU - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
+            print(f"Worker {worker_id}: Inference device: {'CUDA' if use_gpu_infer else 'CPU'}", flush=True)
             sys.stdout.flush()
-
+            
             # Set timeout alarm
             signal.alarm(timeout_seconds)
-
+            
             try:
                 if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
-                    #if (task_idx % print_every) == 0:
-                    #    print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
+                    print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
                     sys.stdout.flush()
-
+                    
                     # Start timing
                     _run_start = time.time()
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
                     _run_elapsed = time.time() - _run_start
-
+                    
                     num_witnesses = len(S_k)
                     coverage = len(Sigma_star) if Sigma_star else 0
                     explanation_result = {
@@ -399,10 +414,9 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         'success': num_witnesses > 0,
                         'timeout': False
                     }
-                    #if (task_idx % print_every) == 0:
-                    #    print(f"Worker {worker_id}: {explainer_name} completed in {_run_elapsed:.2f}s, found {num_witnesses} witnesses", flush=True)
+                    print(f"Worker {worker_id}: {explainer_name} completed in {_run_elapsed:.2f}s, found {num_witnesses} witnesses", flush=True)
                     sys.stdout.flush()
-
+                    
                 elif explainer_name == 'gnnexplainer':
                     gnn_result = run_gnn_explainer_node(
                         model=model,
@@ -418,7 +432,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         'success': gnn_result['edge_mask'] is not None,
                         'timeout': False
                     }
-
+                    
                 elif explainer_name == 'pgexplainer':
                     # Skip PGExplainer (needs training)
                     explanation_result = {
@@ -426,7 +440,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         'timeout': True,
                         'reason': 'PGExplainer requires training, skipped'
                     }
-
+                    
             except TimeoutException:
                 elapsed = time.time() - start_time
                 print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} TIMEOUT (>{timeout_seconds}s)", flush=True)
@@ -436,7 +450,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     'reason': f'Exceeded {timeout_seconds}s timeout'
                 }
                 timed_out = True
-
+                
             except Exception as e:
                 elapsed = time.time() - start_time
                 print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} ERROR: {e}", flush=True)
@@ -445,22 +459,22 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     'timeout': False,
                     'error': str(e)
                 }
-
+                
             finally:
                 # Cancel alarm
                 signal.alarm(0)
-
+                
                 elapsed = time.time() - start_time
                 total_time += elapsed
-
-                if not timed_out and (task_idx % print_every) == 0:
+                
+                if not timed_out:
                     success_str = "✓" if explanation_result.get('success', False) else "✗"
                     print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)", flush=True)
-
+                
                 # Garbage collection
                 del subgraph
                 gc.collect()
-
+                
                 result = {
                     'task_id': task.task_id,
                     'node_id': task.node_id,
@@ -562,47 +576,34 @@ def run_distributed_benchmark(model_path, tasks, explainer_name,
     
     # Phase 2: Parallel execution
     print(f"\nPhase 2: Parallel Execution")
-    # Set up inference device and keep model/data on CPU in workers
-    infer_device = 'cuda' if (device != 'cpu' and torch.cuda.is_available()) else 'cpu'
-    device = 'cpu'  # keep model & data on CPU in workers by default
-    print(f"  Starting {num_workers} workers on device={device} (inference device: {infer_device})...")
-
-    mp.set_start_method('spawn', force=True)
+    print(f"  Starting {num_workers} workers on device={device}...")
+    
+    # mp.set_start_method('spawn', force=True)
     result_queue = mp.Queue()
     processes = []
-
     execution_start = time.time()
-
+    # INFER_DEVICE is determined in main and passed in
+    import random, time as _tm
     for worker_id in range(num_workers):
+        _tm.sleep(random.uniform(0, 0.05))
         p = mp.Process(
             target=worker_process,
             args=(worker_id, task_assignments[worker_id], model_state,
-                  explainer_name, explainer_config, device, infer_device, result_queue)
+                  explainer_name, explainer_config, device, result_queue, 1800, globals().get('INFER_DEVICE', 'cpu'))
         )
         p.start()
         processes.append(p)
-
-    # Collect results robustly with timeout
+    
+    # Collect results
     all_results = []
-    collected = 0
-    collect_timeout = 3600  # seconds
-    while collected < num_workers:
-        try:
-            worker_result = result_queue.get(timeout=collect_timeout)
-            worker_id = worker_result['worker_id']
-            results = worker_result.get('results', [])
-            print(f"Coordinator: Received {len(results)} results from worker {worker_id}", flush=True)
-            all_results.extend(results)
-            collected += 1
-        except queue.Empty:
-            print("Coordinator: Result queue timeout. Checking worker statuses...", flush=True)
-            break
-
-    # Wait for all processes, terminate any stuck
-    for p in processes:
-        if p.is_alive():
-            print(f"Coordinator: Terminating stuck worker PID={p.pid}", flush=True)
-            p.terminate()
+    for _ in range(num_workers):
+        worker_result = result_queue.get()
+        worker_id = worker_result['worker_id']
+        results = worker_result['results']
+        print(f"Coordinator: Received {len(results)} results from worker {worker_id}", flush=True)
+        all_results.extend(results)
+    
+    # Wait for all processes
     for p in processes:
         p.join()
     
@@ -685,16 +686,14 @@ def main():
     NUM_HOPS = 2
     
     # Device strategy:
-    # - All workers keep data and host model on CPU.
-    # - Each worker optionally holds a GPU inference copy for forward() only.
-    USE_GPU_FOR_INFERENCE = True
-    if USE_GPU_FOR_INFERENCE and torch.cuda.is_available():
-        DEVICE = 'cuda'   # request GPU inference copies
-        print(f"\nConfiguration:\n  Worker host device: CPU\n  Inference device: CUDA (GPU forward only)")
-    else:
-        DEVICE = 'cpu'
-        print(f"\nConfiguration:\n  Worker host device: CPU\n  Inference device: CPU (no GPU)")
-    
+    # - Data/Graph operations: Always CPU (avoid CUDA multiprocessing deadlock)
+    # - Model inference: Use GPU if available (custom verify function handles data transfer)
+    USE_GPU_FOR_INFERENCE = False  # default: safe CPU-only to avoid CUDA deadlocks
+    DEVICE = 'cpu'
+    INFER_DEVICE = 'cuda' if (USE_GPU_FOR_INFERENCE and torch.cuda.is_available()) else 'cpu'
+    print(f"\nConfiguration:")
+    print(f"  Model/graph ops device: {DEVICE}")
+    print(f"  Verification (inference) device: {INFER_DEVICE}")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Target nodes: {NUM_TARGETS}")
     print(f"  Hops: {NUM_HOPS}")
@@ -804,6 +803,7 @@ def main():
         print(f"{'='*70}\n")
         
         try:
+            # Pass DEVICE and INFER_DEVICE
             result = run_distributed_benchmark(
                 model_path=MODEL_PATH,
                 tasks=tasks,
@@ -848,5 +848,4 @@ def main():
 
 
 if __name__ == '__main__':
-    mp.set_start_method('spawn', force=True)
     main()
