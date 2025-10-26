@@ -318,13 +318,22 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             subgraph = task.subgraph_data.to(device)
             target_node = subgraph.target_node
             
+            # Print subgraph details for debugging
+            print(f"Worker {worker_id}: Subgraph details - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
+            sys.stdout.flush()
+            
             # Set timeout alarm
             signal.alarm(timeout_seconds)
             
             try:
                 if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
                     print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
+                    sys.stdout.flush()
+                    
+                    # Start timing
+                    _run_start = time.time()
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
+                    _run_elapsed = time.time() - _run_start
                     
                     num_witnesses = len(S_k)
                     coverage = len(Sigma_star) if Sigma_star else 0
@@ -334,7 +343,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         'success': num_witnesses > 0,
                         'timeout': False
                     }
-                    print(f"Worker {worker_id}: {explainer_name} found {num_witnesses} witnesses", flush=True)
+                    print(f"Worker {worker_id}: {explainer_name} completed in {_run_elapsed:.2f}s, found {num_witnesses} witnesses", flush=True)
+                    sys.stdout.flush()
                     
                 elif explainer_name == 'gnnexplainer':
                     gnn_result = run_gnn_explainer_node(
