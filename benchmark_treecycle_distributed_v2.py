@@ -237,21 +237,49 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 x = self.conv2(x, edge_index)
                 return x
         
+        # Wrapper to handle CPU data with GPU model
+        class HybridGCN(torch.nn.Module):
+            """Wrapper that automatically moves data to model device for inference"""
+            def __init__(self, base_model, model_device, data_device):
+                super().__init__()
+                self.base_model = base_model
+                self.model_device = model_device
+                self.data_device = data_device
+            
+            def forward(self, x, edge_index):
+                # Move data to model device
+                x = x.to(self.model_device)
+                edge_index = edge_index.to(self.model_device)
+                
+                # Run inference on model device
+                out = self.base_model(x, edge_index)
+                
+                # Move result back to data device
+                out = out.to(self.data_device)
+                return out
+            
+            def __call__(self, x, edge_index):
+                return self.forward(x, edge_index)
+        
         print(f"Worker {worker_id}: Model class loaded ✓", flush=True)
         sys.stdout.flush()
         
-        # Create model
+        # Create base model
         print(f"Worker {worker_id}: Creating model...")
-        model = GCN(
+        base_model = GCN(
             in_channels=model_state['in_channels'],
             hidden_channels=model_state['hidden_channels'],
             out_channels=model_state['out_channels']
         )
         print(f"Worker {worker_id}: Model created, moving to {model_device}...")
-        model = model.to(model_device)
+        base_model = base_model.to(model_device)
         print(f"Worker {worker_id}: Model on device, loading state dict...")
-        model.load_state_dict(model_state['state_dict'])
-        model.eval()
+        base_model.load_state_dict(model_state['state_dict'])
+        base_model.eval()
+        
+        # Wrap model for hybrid CPU/GPU operation
+        model = HybridGCN(base_model, model_device, data_device)
+        print(f"Worker {worker_id}: Model wrapped with HybridGCN (auto data transfer)")
         
         print(f"Worker {worker_id}: Model loaded and ready on {model_device}")
         print(f"Worker {worker_id}: Data will stay on {data_device} (避免 CUDA 多进程冲突)", flush=True)
@@ -446,10 +474,18 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         })
 
 
-def run_distributed_benchmark(data, model_path, node_ids, explainer_name, 
-                              num_workers=20, explainer_config=None, 
-                              num_hops=2, device='cpu'):
-    """运行分布式基准测试"""
+def run_distributed_benchmark(model_path, tasks, explainer_name, 
+                              num_workers=20, explainer_config=None, device='cpu'):
+    """运行分布式基准测试
+    
+    Args:
+        model_path: 模型路径
+        tasks: 预提取的子图任务列表（从缓存加载）
+        explainer_name: 解释器名称
+        num_workers: worker 数量
+        explainer_config: 解释器配置
+        device: 模型设备 (cuda/cpu)
+    """
     
     if explainer_config is None:
         explainer_config = {}
@@ -458,8 +494,7 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
     print(f"TreeCycle Distributed Benchmark")
     print(f"  Explainer: {explainer_name}")
     print(f"  Num workers: {num_workers}")
-    print(f"  Num nodes: {len(node_ids)}")
-    print(f"  Num hops: {num_hops}")
+    print(f"  Num tasks: {len(tasks)}")
     print(f"  Explainer config: {explainer_config}")
     print("="*70)
     
@@ -468,9 +503,10 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
         print("Loading TreeCycle model...")
         checkpoint = torch.load(model_path, map_location='cpu')
         
-        # Get model dimensions from data
-        in_channels = data.x.size(1)
-        out_channels = len(torch.unique(data.y))
+        # Get model dimensions from first task
+        sample_task = tasks[0]
+        in_channels = sample_task.subgraph_data.x.size(1)
+        out_channels = len(torch.unique(sample_task.subgraph_data.y))
         hidden_channels = 32  # From train_Treecycle.py
         
         model_state = {
@@ -493,27 +529,8 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
         traceback.print_exc()
         raise
     
-    # Phase 1: Extract subgraphs
-    try:
-        print("\nPhase 1: Subgraph Extraction")
-        # Create dummy model for coordinator (not used)
-        dummy_model = None
-        coordinator = Coordinator(data, dummy_model, device, num_hops=num_hops)
-        start_time = time.time()
-        tasks = coordinator.create_tasks(node_ids)
-        extraction_time = time.time() - start_time
-        
-        mem_after = process.memory_info().rss / 1024**3
-        print(f"  Memory after extraction: {mem_after:.2f} GB (+{mem_after - mem_before:.2f} GB)")
-        print(f"  Extraction time: {extraction_time:.2f}s")
-    except Exception as e:
-        print(f"ERROR creating tasks: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-    
-    # Phase 2: Distribute tasks
-    print(f"\nPhase 2: Task Distribution")
+    # Phase 1: Task Distribution (tasks already extracted from cache)
+    print(f"\nPhase 1: Task Distribution")
     balancer = LoadBalancer(num_workers)
     task_assignments = [[] for _ in range(num_workers)]
     
@@ -525,8 +542,8 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
     print(f"  Load stats: min={load_stats['min_load']}, max={load_stats['max_load']}, "
           f"avg={load_stats['avg_load']:.0f}, balance={load_stats['balance_ratio']:.2f}")
     
-    # Phase 3: Parallel execution
-    print(f"\nPhase 3: Parallel Execution")
+    # Phase 2: Parallel execution
+    print(f"\nPhase 2: Parallel Execution")
     print(f"  Starting {num_workers} workers on device={device}...")
     
     mp.set_start_method('spawn', force=True)
@@ -560,7 +577,7 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
     execution_time = time.time() - execution_start
     
     # Aggregate results
-    total_time = extraction_time + execution_time
+    total_time = execution_time  # No extraction time (from cache)
     successful_tasks = [r for r in all_results if r['explanation'].get('success', False)]
     timeout_tasks = [r for r in all_results if r['explanation'].get('timeout', False)]
     failed_tasks = [r for r in all_results if not r['explanation'].get('success', False) and not r['explanation'].get('timeout', False)]
@@ -573,9 +590,9 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
     print(f"Timeout (>30min): {len(timeout_tasks)}")
     print(f"Failed: {len(failed_tasks)}")
     print(f"\nTiming:")
-    print(f"  Extraction time: {extraction_time:.2f}s")
     print(f"  Execution time (makespan): {execution_time:.2f}s")
     print(f"  Total time: {total_time:.2f}s")
+    print(f"  (Subgraph extraction time: loaded from cache)")
     
     if successful_tasks:
         task_times = [r['runtime'] for r in successful_tasks]
@@ -602,9 +619,7 @@ def run_distributed_benchmark(data, model_path, node_ids, explainer_name,
     return {
         'explainer': explainer_name,
         'num_workers': num_workers,
-        'num_targets': len(node_ids),
-        'num_hops': num_hops,
-        'extraction_time': extraction_time,
+        'num_targets': len(tasks),
         'execution_time': execution_time,
         'total_time': total_time,
         'successful_tasks': len(successful_tasks),
@@ -632,6 +647,7 @@ def main():
     # Configuration
     DATA_PATH = 'datasets/TreeCycle/treecycle_d5_bf15_n813616.pt'
     MODEL_PATH = 'models/TreeCycle_gcn_d5_bf15_n813616.pth'
+    CACHE_DIR = 'cache/treecycle'
     NUM_WORKERS = 20
     NUM_TARGETS = 100
     NUM_HOPS = 2
@@ -647,23 +663,70 @@ def main():
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Target nodes: {NUM_TARGETS}")
     print(f"  Hops: {NUM_HOPS}")
+    print(f"  Cache directory: {CACHE_DIR}")
     print(f"  Strategy: 避免 CUDA 多进程死锁，只在推理时用 GPU")
     
-    # Load data
-    print("\nLoading TreeCycle graph...")
-    data = torch.load(DATA_PATH)
-    print(f"  Loaded: {data.num_nodes} nodes, {data.edge_index.size(1)} edges")
+    # Create cache directory
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    
+    # Generate cache filename based on configuration
+    cache_filename = f'subgraphs_n{NUM_TARGETS}_h{NUM_HOPS}_seed42.pkl'
+    cache_path = os.path.join(CACHE_DIR, cache_filename)
+    
+    # Check if cache exists
+    if os.path.exists(cache_path):
+        print(f"\n✓ Found cached subgraphs: {cache_path}")
+        print(f"  Loading from cache (avoid redundant sampling)...")
+        with open(cache_path, 'rb') as f:
+            cached_data = pickle.load(f)
+        
+        sampled_nodes = cached_data['sampled_nodes']
+        tasks = cached_data['tasks']
+        extraction_time = 0.0  # No extraction needed
+        
+        print(f"  Loaded {len(tasks)} cached tasks")
+        print(f"  Sampled nodes: {sampled_nodes[:10]}... (showing first 10)")
+    else:
+        print(f"\n✗ No cache found, will extract subgraphs...")
+        
+        # Load data
+        print("\nLoading TreeCycle graph...")
+        data = torch.load(DATA_PATH)
+        print(f"  Loaded: {data.num_nodes} nodes, {data.edge_index.size(1)} edges")
+        
+        # Sample target nodes (固定 seed=42)
+        print(f"\nSampling {NUM_TARGETS} target nodes (seed=42)...")
+        np.random.seed(42)
+        sampled_nodes = np.random.choice(data.num_nodes, size=NUM_TARGETS, replace=False)
+        print(f"  Sampled nodes: {sampled_nodes[:10]}... (showing first 10)")
+        
+        # Extract subgraphs
+        print("\nExtracting subgraphs...")
+        dummy_model = None
+        coordinator = Coordinator(data, dummy_model, 'cpu', num_hops=NUM_HOPS)
+        start_time = time.time()
+        tasks = coordinator.create_tasks(sampled_nodes)
+        extraction_time = time.time() - start_time
+        print(f"  Extraction time: {extraction_time:.2f}s")
+        
+        # Save to cache
+        print(f"\nSaving subgraphs to cache: {cache_path}")
+        cached_data = {
+            'sampled_nodes': sampled_nodes,
+            'tasks': tasks,
+            'num_targets': NUM_TARGETS,
+            'num_hops': NUM_HOPS,
+            'seed': 42,
+            'extraction_time': extraction_time
+        }
+        with open(cache_path, 'wb') as f:
+            pickle.dump(cached_data, f)
+        print(f"  ✓ Cache saved")
     
     # Load constraints
     print("\nLoading TreeCycle constraints...")
     CONSTRAINTS = get_constraints('TREECYCLE')
     print(f"  Loaded {len(CONSTRAINTS)} constraints")
-    
-    # Sample target nodes
-    print(f"\nSampling {NUM_TARGETS} target nodes...")
-    np.random.seed(42)
-    sampled_nodes = np.random.choice(data.num_nodes, size=NUM_TARGETS, replace=False)
-    print(f"  Sampled nodes: {sampled_nodes[:10]}... (showing first 10)")
     
     # Explainer configurations
     EXPLAINER_CONFIGS = {
@@ -708,13 +771,11 @@ def main():
         
         try:
             result = run_distributed_benchmark(
-                data=data,
                 model_path=MODEL_PATH,
-                node_ids=sampled_nodes,
+                tasks=tasks,
                 explainer_name=explainer_name,
                 num_workers=NUM_WORKERS,
                 explainer_config=EXPLAINER_CONFIGS[explainer_name],
-                num_hops=NUM_HOPS,
                 device=DEVICE
             )
             
