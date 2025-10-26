@@ -2,7 +2,7 @@
 #SBATCH --job-name=treecycle_bench
 #SBATCH --output=logs/treecycle_bench_%j.out
 #SBATCH --error=logs/treecycle_bench_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=20
@@ -43,7 +43,8 @@ echo "Model: TreeCycle_gcn_d5_bf15_n813616.pth"
 echo "Workers: 20"
 echo "Target nodes: 100"
 echo "Hops: 2"
-echo "Explainers: HeuChase, ApxChase, GNNExplainer"
+echo "Explainers: HeuChase, ApxChase, ExhaustChase, GNNExplainer, PGExplainer"
+echo "Timeout per task: 30 minutes (1800s)"
 echo "=================================================="
 
 # Run benchmark

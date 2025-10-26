@@ -13,6 +13,8 @@ import heapq
 import json
 import os
 import psutil
+import signal
+import gc
 from collections import defaultdict
 from tqdm import tqdm
 import pickle
@@ -27,8 +29,18 @@ import sys
 sys.path.append('src')
 from heuchase import HeuChase
 from apxchase import ApxChase
-from baselines import run_gnn_explainer_node
+from exhaustchase import ExhaustChase
+from baselines import run_gnn_explainer_node, PGExplainerBaseline
 from constraints import get_constraints
+
+
+# Timeout exception
+class TimeoutException(Exception):
+    pass
+
+
+def timeout_handler(signum, frame):
+    raise TimeoutException("Task timeout")
 
 
 # GCN Model (same as training)
@@ -176,8 +188,12 @@ class Coordinator:
 
 
 def worker_process(worker_id, tasks, model_state, explainer_name, constraints, 
-                   result_queue, device_id=None):
-    """Worker 进程：处理分配的任务"""
+                   result_queue, device_id=None, timeout_seconds=1800):
+    """Worker 进程：处理分配的任务
+    
+    Args:
+        timeout_seconds: 单个任务的超时时间（秒），默认30分钟
+    """
     import sys
     import gc
     sys.stdout.flush()
@@ -235,8 +251,6 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 noise_std=1e-3,
                 debug=False
             )
-            # Set clean graph for repair cost calculation (use original data)
-            # explainer._H_clean will be set per task
             print(f"Worker {worker_id}: HeuChase initialized ✓", flush=True)
             
         elif explainer_name == 'ApxChase':
@@ -248,9 +262,24 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 B=100,
                 debug=False
             )
-            # Set clean graph for repair cost calculation
-            # explainer._H_clean will be set per task
             print(f"Worker {worker_id}: ApxChase initialized ✓", flush=True)
+            
+        elif explainer_name == 'ExhaustChase':
+            explainer = ExhaustChase(
+                model=model,
+                Sigma=constraints,
+                L=2,
+                k=10,
+                B=100,
+                debug=False,
+                max_enforce_iterations=100
+            )
+            print(f"Worker {worker_id}: ExhaustChase initialized ✓", flush=True)
+            
+        elif explainer_name == 'PGExplainer':
+            # PGExplainer needs training first - skip for now or use quick_fit
+            explainer = None  # Will initialize per-task with quick training
+            print(f"Worker {worker_id}: PGExplainer (per-task initialization)", flush=True)
         
         print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
         
@@ -265,9 +294,14 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
             print(f"Worker {worker_id}: Subgraph moved to device, running explainer...", flush=True)
             
             start_time = time.time()
+            timed_out = False
+            
+            # Set timeout alarm (30 minutes = 1800 seconds)
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
             
             try:
-                if explainer_name in ['HeuChase', 'ApxChase']:
+                if explainer_name in ['HeuChase', 'ApxChase', 'ExhaustChase']:
                     # Use _run method directly like OGBN
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
                     num_witnesses = len(S_k)
@@ -275,7 +309,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     explanation_result = {
                         'num_witnesses': num_witnesses,
                         'coverage': coverage,
-                        'success': num_witnesses > 0
+                        'success': num_witnesses > 0,
+                        'timeout': False
                     }
                     
                 elif explainer_name == 'GNNExplainer':
@@ -290,21 +325,58 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     explanation_result = {
                         'edge_mask': gnn_result.get('edge_mask'),
                         'pred': gnn_result.get('pred'),
-                        'success': gnn_result.get('edge_mask') is not None
+                        'success': gnn_result.get('edge_mask') is not None,
+                        'timeout': False
+                    }
+                    
+                elif explainer_name == 'PGExplainer':
+                    # PGExplainer: Skip training for distributed benchmark (too slow)
+                    # Just report as timeout/not-scalable
+                    print(f"Worker {worker_id}: PGExplainer skipped (needs training, not scalable for distributed)", flush=True)
+                    explanation_result = {
+                        'success': False,
+                        'timeout': True,
+                        'reason': 'PGExplainer requires training, skipped'
                     }
                     
                 else:
                     raise ValueError(f"Unknown explainer: {explainer_name}")
+                    
+            except TimeoutException:
+                elapsed = time.time() - start_time
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} ⏱ TIMEOUT ({elapsed:.2f}s, >{timeout_seconds}s)", flush=True)
+                explanation_result = {
+                    'success': False,
+                    'timeout': True,
+                    'reason': f'Exceeded {timeout_seconds}s timeout'
+                }
+                timed_out = True
+                
+            except Exception as e:
+                elapsed = time.time() - start_time
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} ✗ ERROR: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                explanation_result = {
+                    'success': False,
+                    'timeout': False,
+                    'error': str(e)
+                }
+                
+            finally:
+                # Cancel the alarm
+                signal.alarm(0)
                 
                 elapsed = time.time() - start_time
                 total_time += elapsed
                 
-                success_str = "✓" if explanation_result.get('success', False) else "✗"
-                if explainer_name in ['HeuChase', 'ApxChase']:
-                    witnesses = explanation_result.get('num_witnesses', 0)
-                    print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s, {witnesses} witnesses)", flush=True)
-                else:
-                    print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)", flush=True)
+                if not timed_out:
+                    success_str = "✓" if explanation_result.get('success', False) else "✗"
+                    if explainer_name in ['HeuChase', 'ApxChase', 'ExhaustChase']:
+                        witnesses = explanation_result.get('num_witnesses', 0)
+                        print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s, {witnesses} witnesses)", flush=True)
+                    else:
+                        print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)", flush=True)
                 
                 # Explicit garbage collection to free memory
                 del subgraph
@@ -317,33 +389,6 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     'runtime': elapsed,
                     'worker_id': worker_id,
                     'explanation': explanation_result,
-                }
-                results.append(result)
-                
-            except Exception as e:
-                elapsed = time.time() - start_time
-                total_time += elapsed
-                print(f"Worker {worker_id}: Error on task {task.task_id}: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
-                
-                # Clean up even on error
-                try:
-                    del subgraph
-                except:
-                    pass
-                gc.collect()
-                
-                result = {
-                    'task_id': task.task_id,
-                    'node_id': task.node_id,
-                    'num_edges': task.num_edges,
-                    'runtime': elapsed,
-                    'worker_id': worker_id,
-                    'explanation': {
-                        'success': False,
-                        'error': str(e)
-                    }
                 }
                 results.append(result)
         
@@ -439,27 +484,29 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
     # Aggregate results
     total_time = extraction_time + execution_time
     successful_tasks = [r for r in all_results if r['explanation'].get('success', False)]
-    failed_tasks = [r for r in all_results if not r['explanation'].get('success', False)]
+    timeout_tasks = [r for r in all_results if r['explanation'].get('timeout', False)]
+    failed_tasks = [r for r in all_results if not r['explanation'].get('success', False) and not r['explanation'].get('timeout', False)]
     
     print(f"\n{'='*70}")
     print(f"Results Summary")
     print(f"{'='*70}")
     print(f"Total tasks: {len(all_results)}")
     print(f"Successful: {len(successful_tasks)}")
+    print(f"Timeout (>30min): {len(timeout_tasks)}")
     print(f"Failed: {len(failed_tasks)}")
     print(f"\nTiming:")
     print(f"  Extraction time: {extraction_time:.2f}s")
-    print(f"  Execution time: {execution_time:.2f}s")
+    print(f"  Execution time (makespan): {execution_time:.2f}s")
     print(f"  Total time: {total_time:.2f}s")
     
     if successful_tasks:
         task_times = [r['runtime'] for r in successful_tasks]
-        print(f"\nPer-task time:")
+        print(f"\nSuccessful task times:")
         print(f"  Mean: {np.mean(task_times):.3f}s")
         print(f"  Median: {np.median(task_times):.3f}s")
         print(f"  Min/Max: {np.min(task_times):.3f}s / {np.max(task_times):.3f}s")
         
-        if explainer_name in ['HeuChase', 'ApxChase']:
+        if explainer_name in ['HeuChase', 'ApxChase', 'ExhaustChase']:
             num_witnesses = [r['explanation'].get('num_witnesses', 0) for r in successful_tasks]
             coverage = [r['explanation'].get('coverage', 0) for r in successful_tasks]
             print(f"\nWitnesses found:")
@@ -471,6 +518,9 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
             print(f"  Median: {np.median(coverage):.1f}")
             print(f"  Min/Max: {np.min(coverage)} / {np.max(coverage)}")
     
+    if timeout_tasks:
+        print(f"\nTimeout tasks: {len(timeout_tasks)} (not scalable for distributed setting)")
+    
     return {
         'explainer': explainer_name,
         'num_workers': num_workers,
@@ -480,6 +530,7 @@ def run_distributed_benchmark(data, model, explainer_name, constraints,
         'execution_time': execution_time,
         'total_time': total_time,
         'successful_tasks': len(successful_tasks),
+        'timeout_tasks': len(timeout_tasks),
         'failed_tasks': len(failed_tasks),
         'load_stats': load_stats,
         'results': all_results
@@ -510,8 +561,8 @@ def main():
     constraints = get_constraints('TREECYCLE')
     print(f"Loaded {len(constraints)} constraints")
     
-    # Run benchmarks
-    explainers = ['HeuChase', 'ApxChase', 'GNNExplainer']
+    # Run benchmarks for all explainers
+    explainers = ['HeuChase', 'ApxChase', 'ExhaustChase', 'GNNExplainer', 'PGExplainer']
     all_results = {}
     
     for explainer_name in explainers:
@@ -526,6 +577,17 @@ def main():
             seed=42
         )
         all_results[explainer_name] = result
+        
+        # Print comparison summary
+        print(f"\n{'='*70}")
+        print(f"Progress Summary")
+        print(f"{'='*70}")
+        for exp_name, exp_result in all_results.items():
+            makespan = exp_result['execution_time']
+            success = exp_result['successful_tasks']
+            timeout = exp_result.get('timeout_tasks', 0)
+            total = success + timeout + exp_result['failed_tasks']
+            print(f"{exp_name:20s} | Makespan: {makespan:7.2f}s | Success: {success:3d}/{total:3d} | Timeout: {timeout:3d}")
     
     # Save results
     output_file = 'results/treecycle_distributed_benchmark.json'
