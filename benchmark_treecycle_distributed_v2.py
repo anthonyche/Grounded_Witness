@@ -443,6 +443,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     # ⚠️ WORKAROUND: Run PGExplainer on CPU due to PyG multi-GPU issues
                     # PyTorch Geometric's PGExplainer has device handling issues in multi-GPU
                     # environments. Training on CPU is fast enough (~15-20s) and avoids all issues.
+                    
+                    # NOTE: PGExplainer trains on EACH subgraph independently (no caching)
+                    # This is the correct behavior: each subgraph has different structure,
+                    # so the explainer needs to be trained separately for each task.
                     print(f"Worker {worker_id}: PGExplainer using CPU (PyG multi-GPU workaround)", flush=True)
                     
                     # Save original device and move model to CPU temporarily
@@ -450,15 +454,15 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     model_cpu = model.to('cpu')
                     subgraph_cpu = subgraph  # Already on CPU
                     
-                    # Run PGExplainer on CPU
+                    # Run PGExplainer on CPU - train on THIS subgraph
                     pg_result = run_pgexplainer_node(
                         model=model_cpu,
-                        data=subgraph_cpu,
+                        data=subgraph_cpu,  # Train on this specific subgraph
                         target_node=int(target_node),
                         epochs=explainer_config.get('train_epochs', 30),
                         lr=explainer_config.get('train_lr', 0.003),
                         device='cpu',  # Force CPU
-                        use_cache=True,  # Enable caching to avoid retraining
+                        use_cache=False,  # ← DISABLE cache: train on each subgraph
                     )
                     
                     # Move model back to GPU for next task
