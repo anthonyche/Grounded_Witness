@@ -215,11 +215,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                         noise_std=1e-3,
                         debug=False
                     )
-                    witness_edges = explainer.explain_node(subgraph, target_node)
-                    num_witnesses = len(witness_edges) if witness_edges else 0
+                    # Use _run method directly like OGBN
+                    Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
+                    num_witnesses = len(S_k)
                     
                 elif explainer_name == 'ApxChase':
-                    # ApxChase doesn't take device parameter, uses different API
                     explainer = ApxChase(
                         model=model,
                         Sigma=constraints,
@@ -228,8 +228,9 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                         B=100,  # budget
                         debug=False
                     )
-                    witness_edges = explainer.explain_node(subgraph, target_node)
-                    num_witnesses = len(witness_edges) if witness_edges else 0
+                    # Use _run method directly like OGBN
+                    Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
+                    num_witnesses = len(S_k)
                     
                 elif explainer_name == 'GNNExplainer':
                     explanation = run_gnn_explainer_node(
@@ -238,7 +239,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                         target_node=target_node,
                         device=device
                     )
-                    num_witnesses = explanation.edge_mask.size(0) if explanation else 0
+                    num_witnesses = explanation['edge_mask'].size(0) if explanation and explanation.get('edge_mask') is not None else 0
                     
                 else:
                     raise ValueError(f"Unknown explainer: {explainer_name}")
