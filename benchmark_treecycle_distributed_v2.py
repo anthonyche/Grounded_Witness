@@ -15,7 +15,6 @@ import heapq
 import json
 import os
 import psutil
-import signal
 import gc
 from collections import defaultdict
 from tqdm import tqdm
@@ -24,22 +23,16 @@ import pickle
 from torch_geometric.data import Data
 from torch_geometric.utils import k_hop_subgraph
 
-# Import explainer implementations
+# Import constraints (needed for main)
 import sys
 sys.path.append('src')
-from heuchase import HeuChase
-from apxchase import ApxChase
-from exhaustchase import ExhaustChase
-from baselines import run_gnn_explainer_node, PGExplainerBaseline
 from constraints import get_constraints
 
-
-# Timeout handling
-class TimeoutException(Exception):
-    pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutException("Task timeout")
+# DO NOT import explainers here! Import inside worker_process to avoid multiprocessing issues
+# from heuchase import HeuChase  # ← REMOVED
+# from apxchase import ApxChase  # ← REMOVED  
+# from exhaustchase import ExhaustChase  # ← REMOVED
+# from baselines import run_gnn_explainer_node, PGExplainerBaseline  # ← REMOVED
 
 
 class SubgraphTask:
@@ -188,8 +181,8 @@ class Coordinator:
         return task_assignments, load_stats
 
 
-def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue, timeout_seconds=1800):
-    """Worker 进程：运行解释算法 (simplified like OGBN)"""
+def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue):
+    """Worker 进程：运行解释算法 (exact copy of OGBN structure)"""
     import sys
     import os
     import psutil
@@ -251,8 +244,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
 
         print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
 
-        # Initialize explainer (simple, like OGBN - NO custom verify function)
+        # Initialize explainer (import inside worker to avoid multiprocessing issues)
         if explainer_name == 'heuchase':
+            print(f"Worker {worker_id}: Importing HeuChase...")
+            from heuchase import HeuChase
             print(f"Worker {worker_id}: Creating HeuChase...")
             explainer = HeuChase(
                 model=model,
@@ -267,6 +262,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)})")
 
         elif explainer_name == 'apxchase':
+            print(f"Worker {worker_id}: Importing ApxChase...")
+            from apxchase import ApxChase
             print(f"Worker {worker_id}: Creating ApxChase...")
             explainer = ApxChase(
                 model=model,
@@ -279,6 +276,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             print(f"Worker {worker_id}: ApxChase initialized (B={explainer_config.get('B', 8)})")
 
         elif explainer_name == 'exhaustchase':
+            print(f"Worker {worker_id}: Importing ExhaustChase...")
+            from exhaustchase import ExhaustChase
             print(f"Worker {worker_id}: Creating ExhaustChase...")
             explainer = ExhaustChase(
                 model=model,
@@ -292,7 +291,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             print(f"Worker {worker_id}: ExhaustChase initialized (B={explainer_config.get('B', 8)})")
 
         elif explainer_name == 'gnnexplainer':
-            print(f"Worker {worker_id}: GNNExplainer uses baseline function")
+            print(f"Worker {worker_id}: GNNExplainer uses baseline function (no init needed)")
             explainer = None
 
         elif explainer_name == 'pgexplainer':
@@ -303,9 +302,6 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
 
         print(f"Worker {worker_id}: ✓ Explainer ready, starting {len(tasks)} tasks")
         
-        # Set up signal handler for timeout
-        signal.signal(signal.SIGALRM, timeout_handler)
-        
         results = []
         total_time = 0
         
@@ -313,7 +309,6 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         
         for task_idx, task in enumerate(tasks):
             start_time = time.time()
-            timed_out = False
             
             print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
             
@@ -321,35 +316,22 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             subgraph = task.subgraph_data.to(device)
             target_node = subgraph.target_node
             
-            # Print subgraph details for debugging
-            print(f"Worker {worker_id}: Subgraph on {device} - nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node}", flush=True)
-            sys.stdout.flush()
-            
-            # Set timeout alarm
-            signal.alarm(timeout_seconds)
-            
             try:
                 if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
-                    print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
-                    sys.stdout.flush()
-                    
-                    # Start timing
-                    _run_start = time.time()
+                    # For chase-based explainers: call _run method
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
-                    _run_elapsed = time.time() - _run_start
                     
                     num_witnesses = len(S_k)
                     coverage = len(Sigma_star) if Sigma_star else 0
                     explanation_result = {
                         'num_witnesses': num_witnesses,
                         'coverage': coverage,
-                        'success': num_witnesses > 0,
-                        'timeout': False
+                        'success': num_witnesses > 0
                     }
-                    print(f"Worker {worker_id}: {explainer_name} completed in {_run_elapsed:.2f}s, found {num_witnesses} witnesses", flush=True)
-                    sys.stdout.flush()
                     
                 elif explainer_name == 'gnnexplainer':
+                    # Import inside try block
+                    from baselines import run_gnn_explainer_node
                     gnn_result = run_gnn_explainer_node(
                         model=model,
                         data=subgraph,
@@ -361,61 +343,47 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     explanation_result = {
                         'edge_mask': gnn_result['edge_mask'],
                         'pred': gnn_result['pred'],
-                        'success': gnn_result['edge_mask'] is not None,
-                        'timeout': False
+                        'success': gnn_result['edge_mask'] is not None
                     }
                     
                 elif explainer_name == 'pgexplainer':
                     # Skip PGExplainer (needs training)
                     explanation_result = {
                         'success': False,
-                        'timeout': True,
                         'reason': 'PGExplainer requires training, skipped'
                     }
                     
-            except TimeoutException:
-                elapsed = time.time() - start_time
-                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} TIMEOUT (>{timeout_seconds}s)", flush=True)
-                explanation_result = {
-                    'success': False,
-                    'timeout': True,
-                    'reason': f'Exceeded {timeout_seconds}s timeout'
-                }
-                timed_out = True
-                
             except Exception as e:
-                elapsed = time.time() - start_time
-                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} ERROR: {e}", flush=True)
+                print(f"Worker {worker_id}: Error explaining node {task.node_id}: {e}")
                 explanation_result = {
                     'success': False,
-                    'timeout': False,
                     'error': str(e)
                 }
-                
-            finally:
-                # Cancel alarm
-                signal.alarm(0)
-                
-                elapsed = time.time() - start_time
-                total_time += elapsed
-                
-                if not timed_out:
-                    success_str = "✓" if explanation_result.get('success', False) else "✗"
-                    print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)", flush=True)
-                
-                # Garbage collection
-                del subgraph
-                gc.collect()
-                
-                result = {
-                    'task_id': task.task_id,
-                    'node_id': task.node_id,
-                    'num_edges': task.num_edges,
-                    'runtime': elapsed,
-                    'worker_id': worker_id,
-                    'explanation': explanation_result,
-                }
-                results.append(result)
+            
+            elapsed = time.time() - start_time
+            total_time += elapsed
+            
+            # Print task completion
+            success_str = "✓" if explanation_result.get('success', False) else "✗"
+            if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
+                witnesses = explanation_result.get('num_witnesses', 0)
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s, {witnesses} witnesses)")
+            else:
+                print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} {success_str} ({elapsed:.2f}s)")
+            
+            # Explicit garbage collection after each task
+            del subgraph
+            gc.collect()
+            
+            result = {
+                'task_id': task.task_id,
+                'node_id': task.node_id,
+                'num_edges': task.num_edges,
+                'runtime': elapsed,
+                'worker_id': worker_id,
+                'explanation': explanation_result,
+            }
+            results.append(result)
         
         print(f"Worker {worker_id}: All tasks completed, sending results...", flush=True)
         result_queue.put({
@@ -521,7 +489,7 @@ def run_distributed_benchmark(model_path, tasks, explainer_name,
         p = mp.Process(
             target=worker_process,
             args=(worker_id, task_assignments[worker_id], model_state,
-                  explainer_name, explainer_config, device, result_queue, 1800)
+                  explainer_name, explainer_config, device, result_queue)
         )
         p.start()
         processes.append(p)
