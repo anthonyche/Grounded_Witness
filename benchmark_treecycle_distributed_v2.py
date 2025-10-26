@@ -236,7 +236,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         model = GCN(
             in_channels=model_state['in_channels'],
             hidden_channels=model_state['hidden_channels'],
-            output_dim=model_state['out_channels']
+            out_channels=model_state['out_channels']
         )
         print(f"Worker {worker_id}: Model created, moving to {device}...")
         model = model.to(device)
