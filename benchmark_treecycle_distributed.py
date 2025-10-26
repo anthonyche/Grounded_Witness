@@ -99,6 +99,10 @@ class Coordinator:
     
     def extract_subgraph(self, node_id):
         """提取节点的 L-hop 邻居子图"""
+        # Convert numpy int to Python int or tensor
+        if isinstance(node_id, np.integer):
+            node_id = int(node_id)
+        
         subset, edge_index, mapping, edge_mask = k_hop_subgraph(
             node_idx=node_id,
             num_hops=self.num_hops,
