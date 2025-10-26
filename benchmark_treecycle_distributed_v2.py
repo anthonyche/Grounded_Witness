@@ -701,8 +701,8 @@ def main():
     DATA_PATH = 'datasets/TreeCycle/treecycle_d5_bf15_n813616.pt'  # Small graph for testing
     MODEL_PATH = 'models/TreeCycle_gcn_d5_bf15_n813616.pth'
     CACHE_DIR = 'cache/treecycle'
-    NUM_WORKERS = 4  # Reduced for testing (match 4 GPUs)
-    NUM_TARGETS = 20  # Reduced for testing
+    NUM_WORKERS = 20  # Reduced for testing (match 4 GPUs)
+    NUM_TARGETS = 100  # Reduced for testing
     NUM_HOPS = 2
     
     # Device strategy: Hybrid CPU/GPU (model on GPU, computation on CPU)

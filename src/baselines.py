@@ -439,17 +439,34 @@ class PGExplainerNodeCache:
         print(f"[PGExplainer] Training with {num_train_nodes} sample nodes")
         print(f"[PGExplainer] Device check: x={self.full_data.x.device}, edge_index={self.full_data.edge_index.device}, y={self.full_data.y.device}, model={next(self.model.parameters()).device}")
         
+        # Force CUDA context if using GPU (fix for PyG internal tensor creation)
+        if self.device.type == 'cuda':
+            torch.cuda.set_device(self.device)
+            print(f"[PGExplainer] Set CUDA device context to {self.device}")
+        
         for epoch in range(1, epochs + 1):
             for idx in train_indices:
                 idx_int = int(idx.item())
-                loss = algorithm.train(
-                    epoch,
-                    model=self.wrapped_model,
-                    x=self.full_data.x,
-                    edge_index=self.full_data.edge_index,
-                    index=idx_int,
-                    target=self.full_data.y,
-                )
+                # Ensure we're in the right CUDA context
+                if self.device.type == 'cuda':
+                    with torch.cuda.device(self.device):
+                        loss = algorithm.train(
+                            epoch,
+                            model=self.wrapped_model,
+                            x=self.full_data.x,
+                            edge_index=self.full_data.edge_index,
+                            index=idx_int,
+                            target=self.full_data.y,
+                        )
+                else:
+                    loss = algorithm.train(
+                        epoch,
+                        model=self.wrapped_model,
+                        x=self.full_data.x,
+                        edge_index=self.full_data.edge_index,
+                        index=idx_int,
+                        target=self.full_data.y,
+                    )
         
         print(f"[PGExplainer] Training completed after {epochs} epochs")
     
@@ -457,18 +474,31 @@ class PGExplainerNodeCache:
         """Explain a specific node using the trained explainer."""
         H = _move_data_to_device(subgraph_data, self.device)
         
+        # Force CUDA context if using GPU
+        if self.device.type == 'cuda':
+            torch.cuda.set_device(self.device)
+        
         # Get target label
         with torch.no_grad():
             out = self.model(H.x, H.edge_index)
             target_label = out[target_node].argmax()
         
-        # Generate explanation
-        explanation = self.explainer(
-            x=H.x,
-            edge_index=H.edge_index,
-            index=target_node,
-            target=target_label,
-        )
+        # Generate explanation with CUDA context
+        if self.device.type == 'cuda':
+            with torch.cuda.device(self.device):
+                explanation = self.explainer(
+                    x=H.x,
+                    edge_index=H.edge_index,
+                    index=target_node,
+                    target=target_label,
+                )
+        else:
+            explanation = self.explainer(
+                x=H.x,
+                edge_index=H.edge_index,
+                index=target_node,
+                target=target_label,
+            )
         
         return explanation, out, target_label
 
