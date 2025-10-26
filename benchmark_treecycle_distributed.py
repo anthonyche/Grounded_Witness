@@ -210,8 +210,16 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     num_witnesses = len(witness_edges) if witness_edges else 0
                     
                 elif explainer_name == 'ApxChase':
-                    explainer = ApxChase(model, subgraph, constraints, device=device)
-                    witness_edges = explainer.explain_node(target_node)
+                    # ApxChase doesn't take device parameter, uses different API
+                    explainer = ApxChase(
+                        model=model,
+                        Sigma=constraints,
+                        L=2,  # num_hops
+                        k=10,  # window size
+                        B=100,  # budget
+                        debug=False
+                    )
+                    witness_edges = explainer.explain_node(subgraph, target_node)
                     num_witnesses = len(witness_edges) if witness_edges else 0
                     
                 elif explainer_name == 'GNNExplainer':
