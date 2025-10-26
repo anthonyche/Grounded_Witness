@@ -440,20 +440,31 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                     # Import run_pgexplainer_node inside worker
                     from baselines import run_pgexplainer_node
                     
-                    # PGExplainer needs data on the same device as model for training
-                    # Move subgraph to model's device
-                    subgraph_for_pg = subgraph.to(model_device)
+                    # ⚠️ WORKAROUND: Run PGExplainer on CPU due to PyG multi-GPU issues
+                    # PyTorch Geometric's PGExplainer has device handling issues in multi-GPU
+                    # environments. Training on CPU is fast enough (~15-20s) and avoids all issues.
+                    print(f"Worker {worker_id}: PGExplainer using CPU (PyG multi-GPU workaround)", flush=True)
                     
-                    # Use cached PGExplainer (trains once on first call per worker)
+                    # Save original device and move model to CPU temporarily
+                    model_device_original = next(model.parameters()).device
+                    model_cpu = model.to('cpu')
+                    subgraph_cpu = subgraph  # Already on CPU
+                    
+                    # Run PGExplainer on CPU
                     pg_result = run_pgexplainer_node(
-                        model=model,
-                        data=subgraph_for_pg,  # Data on GPU
+                        model=model_cpu,
+                        data=subgraph_cpu,
                         target_node=int(target_node),
                         epochs=explainer_config.get('train_epochs', 30),
                         lr=explainer_config.get('train_lr', 0.003),
-                        device=model_device,  # Use model's device
+                        device='cpu',  # Force CPU
                         use_cache=True,  # Enable caching to avoid retraining
                     )
+                    
+                    # Move model back to GPU for next task
+                    model.to(model_device_original)
+                    print(f"Worker {worker_id}: Model restored to {model_device_original}", flush=True)
+                    
                     explanation_result = {
                         'edge_mask': pg_result.get('edge_mask'),
                         'pred': pg_result.get('pred'),

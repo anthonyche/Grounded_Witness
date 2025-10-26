@@ -431,6 +431,13 @@ class PGExplainerNodeCache:
             ),
         )
         
+        # Move algorithm to correct device if it has parameters
+        if hasattr(algorithm, 'to'):
+            algorithm.to(self.device)
+        # Also check if explainer has a to() method
+        if hasattr(self.explainer, 'to'):
+            self.explainer.to(self.device)
+        
         # Train on multiple nodes from the full graph
         num_train_nodes = min(100, self.full_data.x.size(0) // 2)
         # Create train_indices on the same device as the data
