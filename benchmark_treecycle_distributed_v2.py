@@ -309,6 +309,21 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 verify_witness_fn=verify_witness_with_device,  # Use custom function
                 debug=False,
             )
+            
+            # Apply Edmonds patch for TreeCycle graphs
+            print(f"Worker {worker_id}: Applying Edmonds patch for TreeCycle...", flush=True)
+            try:
+                from heuchase_patch import candidate_by_edmonds_fixed
+                import types
+                # Monkey-patch the _candidate_by_edmonds function
+                explainer._candidate_by_edmonds = types.MethodType(
+                    lambda self, H, root, emb: candidate_by_edmonds_fixed(H, root, emb, self.noise_std),
+                    explainer
+                )
+                print(f"Worker {worker_id}: ✓ Edmonds patch applied (safer weights, timeout protection)", flush=True)
+            except Exception as e:
+                print(f"Worker {worker_id}: ⚠ Failed to apply patch: {e}", flush=True)
+            
             print(f"Worker {worker_id}: HeuChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)}, m={explainer_config.get('m', 6)})", flush=True)
 
         elif explainer_name == 'apxchase':
