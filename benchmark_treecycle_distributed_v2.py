@@ -254,12 +254,12 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
-                B=explainer_config.get('B', 8),
+                B=explainer_config.get('B', 5),
                 m=explainer_config.get('m', 6),
                 noise_std=explainer_config.get('noise_std', 1e-3),
                 debug=False,
             )
-            print(f"Worker {worker_id}: HeuChase initialized (B={explainer_config.get('B', 8)})")
+            print(f"Worker {worker_id}: HeuChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)}, m={explainer_config.get('m', 6)})")
 
         elif explainer_name == 'apxchase':
             print(f"Worker {worker_id}: Importing ApxChase...")
@@ -270,10 +270,10 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
-                B=explainer_config.get('B', 8),
+                B=explainer_config.get('B', 5),
                 debug=False,
             )
-            print(f"Worker {worker_id}: ApxChase initialized (B={explainer_config.get('B', 8)})")
+            print(f"Worker {worker_id}: ApxChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})")
 
         elif explainer_name == 'exhaustchase':
             print(f"Worker {worker_id}: Importing ExhaustChase...")
@@ -284,11 +284,11 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                 Sigma=explainer_config.get('Sigma', None),
                 L=explainer_config.get('L', 2),
                 k=explainer_config.get('k', 10),
-                B=explainer_config.get('B', 8),
+                B=explainer_config.get('B', 5),
                 debug=False,
                 max_enforce_iterations=explainer_config.get('max_enforce_iterations', 50),
             )
-            print(f"Worker {worker_id}: ExhaustChase initialized (B={explainer_config.get('B', 8)})")
+            print(f"Worker {worker_id}: ExhaustChase initialized (k={explainer_config.get('k', 10)}, B={explainer_config.get('B', 5)})")
 
         elif explainer_name == 'gnnexplainer':
             print(f"Worker {worker_id}: GNNExplainer uses baseline function (no init needed)")
@@ -676,28 +676,29 @@ def main():
     CONSTRAINTS = get_constraints('TREECYCLE')
     print(f"  Loaded {len(CONSTRAINTS)} constraints")
     
-    # Explainer configurations (aligned with config.yaml)
+    # Explainer configurations (MATCHED TO OGBN DEFAULTS - DO NOT CHANGE)
+    # Using OGBN's proven parameters: k=10, B=5, m=6, noise_std=1e-3
     EXPLAINER_CONFIGS = {
         'heuchase': {
             'Sigma': CONSTRAINTS,
-            'L': NUM_HOPS,          # 2 (from config.yaml)
-            'k': 6,                 # window size (from config.yaml)
-            'B': 8,                 # Budget (from config.yaml)
-            'm': 20,                # heuchase_m (from config.yaml)
-            'noise_std': 0.2,       # heuchase_noise_std (from config.yaml)
+            'L': NUM_HOPS,          # 2
+            'k': 10,                # window size (OGBN default)
+            'B': 5,                 # Budget (OGBN default)
+            'm': 6,                 # heuchase_m (OGBN default)
+            'noise_std': 1e-3,      # heuchase_noise_std (OGBN default)
         },
         'apxchase': {
             'Sigma': CONSTRAINTS,
             'L': NUM_HOPS,          # 2
-            'k': 6,                 # window size
-            'B': 8,                 # Budget
+            'k': 10,                # window size (OGBN default)
+            'B': 5,                 # Budget (OGBN default)
         },
         'exhaustchase': {
             'Sigma': CONSTRAINTS,
             'L': NUM_HOPS,          # 2
-            'k': 6,                 # window size
-            'B': 8,                 # Budget
-            'max_enforce_iterations': 50,  # max_enforce_iterations (from config.yaml)
+            'k': 10,                # window size (OGBN default)
+            'B': 5,                 # Budget (OGBN default)
+            'max_enforce_iterations': 50,
         },
         'gnnexplainer': {
             'epochs': 100,
