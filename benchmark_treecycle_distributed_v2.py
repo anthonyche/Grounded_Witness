@@ -182,7 +182,7 @@ class Coordinator:
 
 
 def worker_process(worker_id, tasks, model_state, explainer_name, explainer_config, device, result_queue):
-    """Worker 进程：运行解释算法 (exact copy of OGBN structure)"""
+    """Worker 进程：运行解释算法 (Hybrid: model on GPU, computation on CPU)"""
     import sys
     import os
     import psutil
@@ -196,13 +196,24 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
     
     torch.set_num_threads(1)
     
+    # GPU allocation strategy: assign each worker to a GPU (round-robin)
+    model_device = device  # Device for model inference
+    if 'cuda' in device and torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        gpu_id = worker_id % num_gpus
+        model_device = f'cuda:{gpu_id}'
+        torch.cuda.set_device(gpu_id)
+        print(f"Worker {worker_id}: Assigned GPU {gpu_id}/{num_gpus-1} for model inference", flush=True)
+    else:
+        model_device = 'cpu'
+    
     # Monitor memory
     process = psutil.Process(os.getpid())
     mem_start = process.memory_info().rss / 1024**3
     print(f"Worker {worker_id}: Initial memory: {mem_start:.2f} GB", flush=True)
     
     try:
-        print(f"Worker {worker_id}: Started, device={device}, tasks={len(tasks)}", flush=True)
+        print(f"Worker {worker_id}: Started, model_device={model_device}, tasks={len(tasks)}", flush=True)
         sys.stdout.flush()
         
         # Import model from train_Treecycle.py
@@ -228,19 +239,19 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         sys.stdout.flush()
         
         # Create model
-        print(f"Worker {worker_id}: Creating model...")
+        print(f"Worker {worker_id}: Creating model...", flush=True)
         model = GCN(
             in_channels=model_state['in_channels'],
             hidden_channels=model_state['hidden_channels'],
             out_channels=model_state['out_channels']
         )
-        print(f"Worker {worker_id}: Model created, moving to {device}...")
-        model = model.to(device)
-        print(f"Worker {worker_id}: Model on device, loading state dict...")
+        print(f"Worker {worker_id}: Model created, moving to {model_device}...", flush=True)
+        model = model.to(model_device)
+        print(f"Worker {worker_id}: Model on device, loading state dict...", flush=True)
         model.load_state_dict(model_state['state_dict'])
         model.eval()
         
-        print(f"Worker {worker_id}: Model loaded and ready")
+        print(f"Worker {worker_id}: Model loaded and ready on {model_device}", flush=True)
 
         print(f"Worker {worker_id}: Initializing {explainer_name} explainer...")
 
@@ -315,16 +326,15 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...", flush=True)
             sys.stdout.flush()
             
-            # DEBUG: Check task data before .to(device)
+            # DEBUG: Check task data
             print(f"Worker {worker_id}: Task received, subgraph type={type(task.subgraph_data)}", flush=True)
             print(f"Worker {worker_id}: Subgraph has {task.subgraph_data.num_nodes} nodes, {task.subgraph_data.edge_index.size(1)} edges", flush=True)
             sys.stdout.flush()
             
-            # Simple: move subgraph to same device as model (like OGBN)
-            print(f"Worker {worker_id}: Moving subgraph to {device}...", flush=True)
-            sys.stdout.flush()
-            subgraph = task.subgraph_data.to(device)
-            print(f"Worker {worker_id}: Subgraph moved to {device} ✓", flush=True)
+            # HYBRID STRATEGY: Keep subgraph on CPU for computation
+            # Model is on GPU, explainers will handle data transfer during inference
+            subgraph = task.subgraph_data.to('cpu')  # Always keep subgraph on CPU
+            print(f"Worker {worker_id}: Subgraph kept on CPU (model on {model_device})", flush=True)
             sys.stdout.flush()
             
             target_node = subgraph.target_node
@@ -335,6 +345,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
             try:
                 if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
                     # For chase-based explainers: call _run method
+                    # NOTE: Explainer will move data to GPU during model.forward() calls
                     print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
                     sys.stdout.flush()
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
@@ -358,7 +369,7 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
                         target_node=int(target_node),
                         epochs=explainer_config.get('epochs', 100),
                         lr=explainer_config.get('lr', 0.01),
-                        device=device,
+                        device=model_device,  # Use model's device
                     )
                     explanation_result = {
                         'edge_mask': gnn_result['edge_mask'],
@@ -605,10 +616,23 @@ def main():
     NUM_TARGETS = 100
     NUM_HOPS = 2
     
-    # Device strategy: Simple, like OGBN - pure CPU
-    DEVICE = 'cpu'
+    # Device strategy: Hybrid CPU/GPU (model on GPU, computation on CPU)
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        print(f"\n✓ GPU Available: {num_gpus} GPU(s) detected")
+        for i in range(num_gpus):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        print(f"\n  Strategy: Hybrid CPU/GPU")
+        print(f"    - Model inference: GPU (distributed across {num_gpus} GPUs)")
+        print(f"    - Computation (constraints, Edmonds): CPU")
+        print(f"    - Workers: {NUM_WORKERS} (round-robin across GPUs)")
+    else:
+        print(f"\n⚠ GPU not available, falling back to CPU")
+    
     print(f"\nConfiguration:")
-    print(f"  Device: {DEVICE} (pure CPU, like OGBN)")
+    print(f"  Device: {DEVICE}")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Target nodes: {NUM_TARGETS}")
     print(f"  Hops: {NUM_HOPS}")
