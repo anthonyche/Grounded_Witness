@@ -174,17 +174,31 @@ class Coordinator:
 def worker_process(worker_id, tasks, model_state, explainer_name, constraints, 
                    result_queue, device_id=None):
     """Worker 进程：处理分配的任务"""
+    import sys
+    sys.stdout.flush()
+    print(f"\n{'='*60}", flush=True)
+    print(f"WORKER {worker_id}: FUNCTION ENTRY", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    sys.stdout.flush()
+    
     try:
+        print(f"Worker {worker_id}: Started, tasks={len(tasks)}, explainer={explainer_name}", flush=True)
+        
         # Set device
         if device_id is not None and torch.cuda.is_available():
             device = torch.device(f'cuda:{device_id}')
         else:
             device = torch.device('cpu')
         
+        print(f"Worker {worker_id}: Using device={device}", flush=True)
+        
         # Load model
         if len(tasks) == 0:
+            print(f"Worker {worker_id}: No tasks, exiting", flush=True)
+            result_queue.put((worker_id, []))
             return
         
+        print(f"Worker {worker_id}: Loading model...", flush=True)
         first_task = tasks[0]
         in_channels = first_task.subgraph_data.x.size(1)
         out_channels = len(torch.unique(first_task.subgraph_data.y))
@@ -194,40 +208,49 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
         model = model.to(device)
         model.eval()
         
-        print(f"Worker {worker_id}: Processing {len(tasks)} tasks with {explainer_name}")
+        print(f"Worker {worker_id}: Model loaded ✓", flush=True)
+        
+        # Initialize explainer ONCE (not per task!)
+        print(f"Worker {worker_id}: Initializing {explainer_name}...", flush=True)
+        explainer = None
+        
+        if explainer_name == 'HeuChase':
+            explainer = HeuChase(
+                model=model,
+                Sigma=constraints,
+                L=2,
+                k=10,
+                B=100,
+                m=6,
+                noise_std=1e-3,
+                debug=False
+            )
+            print(f"Worker {worker_id}: HeuChase initialized ✓", flush=True)
+            
+        elif explainer_name == 'ApxChase':
+            explainer = ApxChase(
+                model=model,
+                Sigma=constraints,
+                L=2,
+                k=10,
+                B=100,
+                debug=False
+            )
+            print(f"Worker {worker_id}: ApxChase initialized ✓", flush=True)
+        
+        print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
         
         results = []
-        for task in tasks:
+        for task_idx, task in enumerate(tasks):
+            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id})...", flush=True)
+            
             subgraph = task.subgraph_data.to(device)
             target_node = subgraph.target_node
             
             start_time = time.time()
             
             try:
-                if explainer_name == 'HeuChase':
-                    explainer = HeuChase(
-                        model=model,
-                        Sigma=constraints,
-                        L=2,  # num_hops
-                        k=10,  # window size
-                        B=100,  # budget
-                        m=6,  # number of Edmonds candidates
-                        noise_std=1e-3,
-                        debug=False
-                    )
-                    # Use _run method directly like OGBN
-                    Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
-                    num_witnesses = len(S_k)
-                    
-                elif explainer_name == 'ApxChase':
-                    explainer = ApxChase(
-                        model=model,
-                        Sigma=constraints,
-                        L=2,  # num_hops
-                        k=10,  # window size
-                        B=100,  # budget
-                        debug=False
-                    )
+                if explainer_name in ['HeuChase', 'ApxChase']:
                     # Use _run method directly like OGBN
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
                     num_witnesses = len(S_k)
@@ -246,6 +269,8 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 
                 elapsed = time.time() - start_time
                 
+                print(f"Worker {worker_id}: Task {task_idx+1} done in {elapsed:.2f}s, witnesses={num_witnesses}", flush=True)
+                
                 results.append({
                     'task_id': task.task_id,
                     'node_id': task.node_id,
@@ -257,7 +282,9 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                 
             except Exception as e:
                 elapsed = time.time() - start_time
-                print(f"Worker {worker_id}: Error on task {task.task_id}: {e}")
+                print(f"Worker {worker_id}: Error on task {task.task_id}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 results.append({
                     'task_id': task.task_id,
                     'node_id': task.node_id,
@@ -268,14 +295,16 @@ def worker_process(worker_id, tasks, model_state, explainer_name, constraints,
                     'error': str(e)
                 })
         
+        print(f"Worker {worker_id}: All tasks completed, sending results...", flush=True)
         result_queue.put((worker_id, results))
-        print(f"Worker {worker_id}: Completed {len(results)} tasks")
+        print(f"Worker {worker_id}: Results sent, exiting ✓", flush=True)
         
     except Exception as e:
-        print(f"Worker {worker_id}: Fatal error: {e}")
+        print(f"Worker {worker_id}: Fatal error: {e}", flush=True)
         import traceback
         traceback.print_exc()
         result_queue.put((worker_id, []))
+        sys.stdout.flush()
 
 
 def run_distributed_benchmark(data, model, explainer_name, constraints, 
