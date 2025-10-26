@@ -300,26 +300,46 @@ def worker_process(worker_id, tasks, model_state, explainer_name, explainer_conf
         else:
             raise ValueError(f"Unknown explainer: {explainer_name}")
 
-        print(f"Worker {worker_id}: ✓ Explainer ready, starting {len(tasks)} tasks")
+        print(f"Worker {worker_id}: ✓ Explainer ready, starting {len(tasks)} tasks", flush=True)
+        sys.stdout.flush()
         
         results = []
         total_time = 0
         
-        print(f"Worker {worker_id}: Processing {len(tasks)} tasks...")
+        print(f"Worker {worker_id}: Processing {len(tasks)} tasks...", flush=True)
+        sys.stdout.flush()
         
         for task_idx, task in enumerate(tasks):
             start_time = time.time()
             
-            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...")
+            print(f"Worker {worker_id}: Task {task_idx+1}/{len(tasks)} (node {task.node_id}, {task.num_edges} edges)...", flush=True)
+            sys.stdout.flush()
+            
+            # DEBUG: Check task data before .to(device)
+            print(f"Worker {worker_id}: Task received, subgraph type={type(task.subgraph_data)}", flush=True)
+            print(f"Worker {worker_id}: Subgraph has {task.subgraph_data.num_nodes} nodes, {task.subgraph_data.edge_index.size(1)} edges", flush=True)
+            sys.stdout.flush()
             
             # Simple: move subgraph to same device as model (like OGBN)
+            print(f"Worker {worker_id}: Moving subgraph to {device}...", flush=True)
+            sys.stdout.flush()
             subgraph = task.subgraph_data.to(device)
+            print(f"Worker {worker_id}: Subgraph moved to {device} ✓", flush=True)
+            sys.stdout.flush()
+            
             target_node = subgraph.target_node
+            
+            print(f"Worker {worker_id}: Running {explainer_name} on subgraph (nodes={subgraph.num_nodes}, edges={subgraph.edge_index.size(1)}, target={target_node})...", flush=True)
+            sys.stdout.flush()
             
             try:
                 if explainer_name in ['heuchase', 'apxchase', 'exhaustchase']:
                     # For chase-based explainers: call _run method
+                    print(f"Worker {worker_id}: Calling {explainer_name}._run()...", flush=True)
+                    sys.stdout.flush()
                     Sigma_star, S_k = explainer._run(H=subgraph, root=int(target_node))
+                    print(f"Worker {worker_id}: {explainer_name}._run() returned!", flush=True)
+                    sys.stdout.flush()
                     
                     num_witnesses = len(S_k)
                     coverage = len(Sigma_star) if Sigma_star else 0
