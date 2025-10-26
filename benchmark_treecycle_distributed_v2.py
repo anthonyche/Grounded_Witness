@@ -710,7 +710,7 @@ def main():
     }
     
     # Run benchmarks
-    EXPLAINERS = ['heuchase', 'apxchase', 'exhaustchase', 'gnnexplainer', 'pgexplainer']
+    EXPLAINERS = ['apxchase', 'exhaustchase', 'gnnexplainer', 'pgexplainer']
     all_results = {}
     
     for explainer_name in EXPLAINERS:
