@@ -43,37 +43,63 @@ mkdir -p logs
 # ================================================
 # 从小到大，逐步测试
 
-# 配置 1: 中等规模（推荐首次运行）
+# ============ 小规模配置（快速测试）============
+# 配置 1: 小规模-1 (~54K 节点，1.1M 边)
+# DEPTH=4
+# BRANCHING_FACTOR=15
+# CYCLE_PROB=0.2
+# NUM_TYPES=5
+# DESCRIPTION="Small scale (~54K nodes, ~1.1M edges) - Quick test"
+# 资源要求: --mem=16G --time=00:30:00
+
+# 配置 2: 小规模-2 (~111K 节点，2.3M 边)
+# DEPTH=5
+# BRANCHING_FACTOR=10
+# CYCLE_PROB=0.2
+# NUM_TYPES=5
+# DESCRIPTION="Small-medium scale (~111K nodes, ~2.3M edges) - Quick test"
+# 资源要求: --mem=32G --time=00:30:00
+
+# ============ 中等规模配置（标准实验）============
+# 配置 3: 当前配置 (~813K 节点，17M 边) ✅ 已成功生成
 # DEPTH=5
 # BRANCHING_FACTOR=15
 # CYCLE_PROB=0.2
 # NUM_TYPES=5
-# DESCRIPTION="Medium scale (~813K nodes)"
+# DESCRIPTION="Medium scale (~813K nodes, ~17M edges) - Standard experiments"
+# 资源要求: --mem=64G --time=01:00:00
 
-# 配置 2: 大规模（如果配置1成功，取消注释这个）
+# ============ 大规模配置（Scalability 测试）============
+# 配置 4: 大规模-1 (~12M 节点，256M 边) ← 推荐下一步
 DEPTH=6
-BRANCHING_FACTOR=20
+BRANCHING_FACTOR=15
 CYCLE_PROB=0.15
 NUM_TYPES=5
-DESCRIPTION="Large scale (~67M nodes)"
+DESCRIPTION="Large scale (~12M nodes, ~256M edges) - Scalability test"
+# 资源要求: --mem=128G --time=02:00:00
 
- #配置 3: 超大规模（如果配置2成功，取消注释这个）
-#DEPTH=6
-#BRANCHING_FACTOR=25
-#CYCLE_PROB=0.1
-#NUM_TYPES=5
-#DESCRIPTION="Very large scale (~254M nodes)"
-
-# 配置 4: Billion-scale（最终目标，需要更多资源）
-# DEPTH=7
-# BRANCHING_FACTOR=30
-# CYCLE_PROB=0.05
+# 配置 5: 大规模-2 (~67M 节点，1.4B 边)
+# DEPTH=6
+# BRANCHING_FACTOR=20
+# CYCLE_PROB=0.15
 # NUM_TYPES=5
-# DESCRIPTION="Billion scale (~22.6B nodes) - REQUIRES HIGH MEMORY!"
-# 注意：这个配置需要修改 Slurm 参数：
-#   --mem=256G 或更高
-#   --time=24:00:00
-#   --partition=bigmem (如果有的话)
+# DESCRIPTION="Very large scale (~67M nodes, ~1.4B edges) - Scalability test"
+# 资源要求: --mem=256G --time=04:00:00
+# 注意：需要修改 Slurm 头部：
+#   #SBATCH --mem=256G
+#   #SBATCH --time=04:00:00
+
+# 配置 6: 超大规模 (~254M 节点，5.3B 边)
+# DEPTH=6
+# BRANCHING_FACTOR=25
+# CYCLE_PROB=0.1
+# NUM_TYPES=5
+# DESCRIPTION="Ultra large scale (~254M nodes, ~5.3B edges) - Extreme test"
+# 资源要求: --mem=512G --time=08:00:00 --partition=bigmem
+# 注意：需要修改 Slurm 头部：
+#   #SBATCH --mem=512G
+#   #SBATCH --time=08:00:00
+#   #SBATCH --partition=bigmem  # 如果 HPC 有这个 partition
 
 echo "=================================================="
 echo "TreeCycle Generation Configuration"

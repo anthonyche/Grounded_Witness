@@ -6,12 +6,12 @@ from matplotlib import rcParams
 # 设置全局字体为 Times New Roman
 rcParams['font.family'] = 'serif'
 rcParams['font.serif'] = ['Times New Roman']
-rcParams['font.size'] = 8
-rcParams['axes.labelsize'] = 9
-rcParams['axes.titlesize'] = 9
-rcParams['xtick.labelsize'] = 8
-rcParams['ytick.labelsize'] = 8
-rcParams['legend.fontsize'] = 6
+rcParams['font.size'] = 8            # 基础字体
+rcParams['axes.labelsize'] = 9       # 坐标轴标签
+rcParams['axes.titlesize'] = 9       # 坐标轴标题
+rcParams['xtick.labelsize'] = 8      # X轴刻度
+rcParams['ytick.labelsize'] = 8      # Y轴刻度
+rcParams['legend.fontsize'] = 6      # 图例字体默认值（会被硬编码覆盖）
 
 # 定义一致的颜色方案和图案（降低饱和度）
 COLORS = {
@@ -140,7 +140,7 @@ df_figure_7 = pd.DataFrame(figure_7)
 
 #figure 8: Coverage vs B
 figure_8 = {
-    "B": [1, 2, 4, 6, 8],
+    "k": [1, 2, 4, 6, 8],
     "ApxIChase": [0.2, 0.4, 0.8, 0.8, 0.8],
     "HeuIChase": [0.2, 0.4, 0.5, 0.6, 0.6],
     "GNNExplainer": [0, 0, 0, 0, 0],
@@ -149,7 +149,7 @@ figure_8 = {
 }
 df_figure_8 = pd.DataFrame(figure_8)
 #对df_figure_8画折线图, 支持对数坐标
-#Coverage vs Budget (B)
+#Coverage vs Budget (k)
 
 figure_9 = {
     "Constraint_Size":[10,20,30,40,50],
@@ -262,10 +262,10 @@ def plot_bar_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, le
             visible_ticks = [tick for tick in visible_ticks if tick >= ylim_bottom]
         ax.set_yticks(visible_ticks)
     
-    # 图例（使用自定义位置）
+    # 图例（硬编码字体大小为14pt，保持图例在图内）
     legend = ax.legend(loc=legend_loc,
                       frameon=False,
-                      fontsize=6.5, handlelength=1.2, handletextpad=0.3,
+                      fontsize=7, handlelength=1.2, handletextpad=0.3,
                       labelspacing=0.3, ncol=legend_ncol, borderpad=0.3)
     
     # 背景
@@ -281,8 +281,13 @@ def plot_bar_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, le
     plt.close()
 
 
-def plot_line_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, legend_loc='upper left', legend_ncol=1, ylim_top=None, ylim_bottom=None, xticks=None):
-    """绘制折线图"""
+def plot_line_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, legend_loc='upper left', legend_ncol=1, ylim_top=None, ylim_bottom=None, xticks=None, show_exhaustive_timeout=False):
+    """绘制折线图
+    
+    Args:
+        show_exhaustive_timeout: 如果为 True，会为 Exhaustive 列绘制特殊的超时标记
+                                 (第一个非nan值用实点，其他位置用虚线+红叉)
+    """
     fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
     
     for col in y_cols:
@@ -300,6 +305,45 @@ def plot_line_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, l
                markerfacecolor='none',  # 标记填充透明
                markeredgecolor=color,   # 标记边缘颜色与线条一致
                markeredgewidth=1.3)  # 稍微减细边缘
+    
+    # 处理 Exhaustive 的特殊绘制（超时标记）
+    if show_exhaustive_timeout and 'Exhaustive' in df.columns:
+        exhaustive_values = df['Exhaustive'].values
+        x_values = df[x_col].values if xticks is None else xticks
+        
+        # 找到第一个非 nan 值（基线值）
+        baseline_value = None
+        baseline_idx = None
+        for i, val in enumerate(exhaustive_values):
+            if not np.isnan(val):
+                baseline_value = val
+                baseline_idx = i
+                break
+        
+        if baseline_value is not None:
+            color_exhaustive = COLORS.get('Exhaustive', '#A682B3')
+            
+            # 1. 画实际的基线点
+            ax.plot(x_values[baseline_idx], baseline_value,
+                   marker=MARKERS.get('Exhaustive', 'D'),
+                   color=color_exhaustive,
+                   markersize=5.5,
+                   markerfacecolor='none',
+                   markeredgecolor=color_exhaustive,
+                   markeredgewidth=1.3,
+                   label=LEGEND_LABELS.get('Exhaustive', 'Exh'),
+                   zorder=5)
+            
+            # 2. 画水平虚线（跨越所有 x 位置）
+            ax.axhline(y=baseline_value, color=color_exhaustive, 
+                      linestyle='--', linewidth=1.0, alpha=0.5, zorder=1)
+            
+            # 3. 在超时位置画红叉
+            for i, val in enumerate(exhaustive_values):
+                if np.isnan(val):
+                    ax.plot(x_values[i], baseline_value,
+                           marker='x', color='red', markersize=6,
+                           markeredgewidth=1.5, zorder=6)
     
     # 设置坐标轴
     ax.set_xlabel(xlabel, fontsize=10)
@@ -334,10 +378,10 @@ def plot_line_chart(df, x_col, y_cols, ylabel, xlabel, filename, use_log=True, l
             visible_ticks = [tick for tick in visible_ticks if tick >= ylim_bottom]
         ax.set_yticks(visible_ticks)
     
-    # 图例（使用自定义位置）
+    # 图例（硬编码字体大小为14pt，保持图例在图内）
     legend = ax.legend(loc=legend_loc,
                       frameon=False,
-                      fontsize=6.5, handlelength=1.2, handletextpad=0.3,
+                      fontsize=7, handlelength=1.2, handletextpad=0.3,
                       labelspacing=0.3, ncol=legend_ncol, borderpad=0.3)
     
     # 背景
@@ -465,14 +509,14 @@ plot_bar_chart(
     ylim_bottom=0
 )
 
-# Figure 8: Coverage vs Budget B (line chart, no log scale)
+# Figure 8: Coverage vs Budget k (line chart, no log scale)
 # Legend horizontal on top, y-axis from -0.05 to 1.2
 plot_line_chart(
     df_figure_8,
-    'B',
+    'k',
     ['ApxIChase', 'HeuIChase', 'GNNExplainer', 'PGExplainer', 'Exhaustive'],
     'Coverage',
-    'B',
+    'k',
     'figure_8_coverage_vs_budget.png',
     use_log=False,
     legend_loc='upper center',
@@ -556,7 +600,7 @@ plot_line_chart(
     'Processors',
     ['ApxIChase', 'HeuIChase', 'GNNExplainer'],
     'Total Runtime (sec)',
-    'Number of Workers',
+    'Number of Processors',
     'figure_13_ogbn_runtime_vs_workers.png',
     use_log=True,
     legend_loc='upper right',
@@ -566,4 +610,88 @@ plot_line_chart(
     xticks=[4, 6, 8, 10, 20]
 )
 
+# ========== TreeCycle 新增图表 ==========
+
+# Figure 14: TreeCycle Runtime Varying Graph Size (line chart, log scale)
+figure_14 = {
+    "Graph_Size": ["1.1M", "2.3M", "17M", "1.4B"],
+    "ApxIChase": [292.4, 318.7, 447.9, 898.3],
+    "HeuIChase": [48.6, 54.2, 82.51, 182.7],
+    "GNNExplainer": [22.8, 38.9, 54, 86.4],
+    "PGExplainer": [78.2, 86.7, 126, 210.3],
+    "Exhaustive": [5120, 8480, 19800, 28800]  # 第一个点是基线，其他超时
+}
+df_figure_14 = pd.DataFrame(figure_14)
+
+plot_line_chart(
+    df_figure_14,
+    'Graph_Size',
+    ['ApxIChase', 'HeuIChase', 'GNNExplainer', 'PGExplainer', 'Exhaustive'],
+    'Total Runtime (sec)',
+    'Graph Size (# Edges)',
+    'figure_14_treecycle_runtime_vs_graph_size.png',
+    use_log=True,
+    legend_loc='upper left',
+    legend_ncol=5,
+    ylim_bottom=10,
+    ylim_top=100000,  # 增加上限以显示 28800
+    xticks=["1.1M", "2.3M", "17M", "1.4B"],
+    show_exhaustive_timeout=False  # 启用 Exhaustive 超时标记
+)
+
+# Figure 15: TreeCycle Runtime (1.4B) Varying Number of Processors (line chart, log scale)
+figure_15 = {
+    "Processors": [4, 6, 8, 10, 20],
+    "ApxIChase": [5030.48, 3291, 2424, 1804, 898.3],
+    "HeuIChase": [794.85, 627, 484, 383, 182.7],
+    "GNNExplainer": [418.2, 258.7, 209.6, 187.9, 86.4],
+    "PGExplainer": [1208, 784, 578, 454, 210.3],
+    "Exhaustive": [np.nan, np.nan, np.nan, np.nan, 28800]  # 最后一个点是基线
+}
+df_figure_15 = pd.DataFrame(figure_15)
+
+plot_line_chart(
+    df_figure_15,
+    'Processors',
+    ['ApxIChase', 'HeuIChase', 'GNNExplainer', 'PGExplainer'],
+    'Total Runtime (sec)',
+    'Number of Processors',
+    'figure_15_treecycle_runtime_vs_processors.png',
+    use_log=True,
+    legend_loc='upper right',
+    legend_ncol=5,
+    ylim_bottom=50,
+    ylim_top=100000,  # 增加上限以显示 28800
+    xticks=[4, 6, 8, 10, 20],
+    show_exhaustive_timeout=True  # 启用 Exhaustive 超时标记
+)
+
+# Figure 16: TreeCycle Runtime (1.4B) Varying Number of Target Nodes (line chart, log scale)
+figure_16 = {
+    "Target_Nodes": [100, 200, 300, 400, 500],
+    "ApxIChase": [898.3, 1815, 2724, 3695, 4568],
+    "HeuIChase": [182.7, 372, 542, 748, 905],
+    "GNNExplainer": [86.4, 171.8, 259.7, 345.9, 433.6],
+    "PGExplainer": [210.3, 433, 618, 862, 1038],
+    "Exhaustive": [28800, np.nan, np.nan, np.nan, np.nan]  # 第一个点是基线
+}
+df_figure_16 = pd.DataFrame(figure_16)
+
+plot_line_chart(
+    df_figure_16,
+    'Target_Nodes',
+    ['ApxIChase', 'HeuIChase', 'GNNExplainer', 'PGExplainer'],
+    'Total Runtime (sec)',
+    'Query Load (# Target Nodes)',
+    'figure_16_treecycle_runtime_vs_target_nodes.png',
+    use_log=True,
+    legend_loc='upper left',
+    legend_ncol=5,
+    ylim_bottom=50,
+    ylim_top=100000,  # 增加上限以显示 28800
+    xticks=[100, 200, 300, 400, 500],
+    show_exhaustive_timeout=True  # 启用 Exhaustive 超时标记
+)
+
 print("\n✓ All figures generated successfully!")
+print("✓ TreeCycle figures (14-16) added!")
