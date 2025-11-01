@@ -10,3 +10,4 @@ results/
 checkpoints/
 datasets/
 cache/
+*.slurm
