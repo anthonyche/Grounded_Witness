@@ -11,3 +11,5 @@ checkpoints/
 datasets/
 cache/
 *.slurm
+*.txt
+*.png
