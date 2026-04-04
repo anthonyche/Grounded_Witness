@@ -1,0 +1,1540 @@
+{
+  "dataset": "DBLP",
+  "constraint_source": "mined",
+  "constraint_type_source": "dblp_native_bucket",
+  "constraint_rule_mode": "standard_backchase",
+  "random_seed": 42,
+  "num_constraints": 22,
+  "constraints": [
+    {
+      "name": "mined_dblp_app_1_2_2_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 18,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 15,
+        "target_consequent_match_count": 46,
+        "target_workload_active_count": 15,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_2_2_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 18,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 15,
+        "target_consequent_match_count": 46,
+        "target_workload_active_count": 15,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_2_3_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 23,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 15,
+        "target_consequent_match_count": 46,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_3_3_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 24,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_3_3_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 24,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_2_3_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 23,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_2_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 16,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 15,
+        "target_consequent_match_count": 46,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_4_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 17,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 11,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_4_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 17,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 11,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_2_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 16,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 11,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_3_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 22,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 10,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_1_3_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 22,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 11,
+        "target_consequent_match_count": 23,
+        "target_workload_active_count": 10,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_4_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 2,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 6,
+        "target_consequent_match_count": 6,
+        "target_workload_active_count": 6,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_4_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 2,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 6,
+        "target_consequent_match_count": 6,
+        "target_workload_active_count": 6,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_2_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 2,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 5,
+        "target_consequent_match_count": 5,
+        "target_workload_active_count": 5,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_2_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 2,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 5,
+        "target_consequent_match_count": 5,
+        "target_workload_active_count": 5,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 1,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 6,
+        "target_consequent_match_count": 6,
+        "target_workload_active_count": 2,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 1,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 5,
+        "target_consequent_match_count": 5,
+        "target_workload_active_count": 2,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_3_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 4,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 8,
+        "target_consequent_match_count": 10,
+        "target_workload_active_count": 1,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_3_4_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 3,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 8,
+        "target_consequent_match_count": 10,
+        "target_workload_active_count": 1,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_3_4_c1_a_p2_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 3,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P2",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 6,
+        "target_consequent_match_count": 6,
+        "target_workload_active_count": 1,
+        "target_probe_sample_count": 30
+      }
+    },
+    {
+      "name": "mined_dblp_app_0_2_3_c0_a_p1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P1": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P1",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P1"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "P2": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "P2",
+            0
+          ]
+        ],
+        "distinct": [
+          "A",
+          "P2"
+        ]
+      },
+      "mining": {
+        "template": "dblp_author_multi_paper_backchase",
+        "support": 4,
+        "confidence": 1.0,
+        "constraint_rule_mode": "standard_backchase",
+        "consequent_edge": [
+          "A",
+          "P1",
+          0
+        ],
+        "antecedent_edge_count": 1,
+        "target_workload_hit_count": 5,
+        "target_consequent_match_count": 5,
+        "target_workload_active_count": 1,
+        "target_probe_sample_count": 30
+      }
+    }
+  ],
+  "mining": {
+    "constraint_templates": [
+      "triangle",
+      "extension"
+    ],
+    "constraint_min_support": 1,
+    "constraint_min_confidence": 0.6,
+    "constraint_max_patterns": 64,
+    "constraint_mining_hops": 1,
+    "constraint_mining_max_samples": 64,
+    "constraint_ranking_version": "activehit_v1"
+  }
+}

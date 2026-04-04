@@ -4,6 +4,7 @@ import json
 import os
 import random
 import csv
+import hashlib
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -147,6 +148,7 @@ def _cache_path(config: Dict[str, Any], dataset_key: str) -> str:
     source = str(config.get("constraint_source", "static")).lower()
     type_source = str(config.get("constraint_type_source", "auto")).lower()
     rule_mode = str(config.get("constraint_rule_mode", "legacy")).lower()
+    ranking_version = str(config.get("constraint_ranking_version", "activehit_v1")).lower()
     l_hops = int(config.get("constraint_mining_hops", config.get("L", 2)))
     support = int(config.get("constraint_min_support", 3))
     confidence = float(config.get("constraint_min_confidence", 0.6))
@@ -158,10 +160,36 @@ def _cache_path(config: Dict[str, Any], dataset_key: str) -> str:
     else:
         template_token = str(templates).lower()
     target_match_flag = 1 if bool(config.get("constraint_filter_target_matchability", False)) else 0
+    type_param_token = "default"
+    if dataset_key.upper() == "DBLP" and type_source in {"dblp_native_bucket", "native_bucket"}:
+        type_param_token = "ab{a}_pb{p}_tb{t}_cm{c}".format(
+            a=int(config.get("dblp_author_degree_buckets", 4)),
+            p=int(config.get("dblp_paper_degree_buckets", 6)),
+            t=int(config.get("dblp_term_frequency_buckets", 10)),
+            c=str(config.get("dblp_conference_type_mode", "identity")).lower(),
+        )
+    target_probe_sig = "global"
+    if target_match_flag:
+        if config.get("target_nodes"):
+            target_items = [int(v) for v in config.get("target_nodes", [])]
+            sig_src = {"target_nodes": target_items}
+        elif config.get("target_graph_indices"):
+            target_items = [int(v) for v in config.get("target_graph_indices", [])]
+            sig_src = {"target_graph_indices": target_items}
+        else:
+            sig_src = {
+                "target_ratio": config.get("target_ratio"),
+                "min_targets": config.get("min_targets"),
+                "probe_samples": config.get("constraint_target_probe_samples", 64),
+            }
+        target_probe_sig = hashlib.sha1(
+            json.dumps(sig_src, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:10]
     filename = (
         f"{dataset_key.lower()}_{source}_{type_source}"
         f"_{rule_mode}_L{l_hops}_sup{support}_conf{confidence:.2f}_max{max_patterns}"
-        f"_tmpl_{template_token}_tm_{target_match_flag}_seed{seed}.json"
+        f"_tmpl_{template_token}_tm_{target_match_flag}_rank_{ranking_version}_tp_{type_param_token}"
+        f"_tg_{target_probe_sig}_seed{seed}.json"
     )
     return os.path.join(_cache_dir(config), filename)
 
@@ -292,9 +320,9 @@ def _dblp_native_bucket_types(config: Dict[str, Any], data: Data) -> torch.Tenso
     native = native.detach().cpu().to(torch.long)
     labels = torch.zeros(int(data.num_nodes), dtype=torch.long)
 
-    author_buckets = max(4, int(config.get("dblp_author_degree_buckets", 4)))
-    paper_buckets = max(6, int(config.get("dblp_paper_degree_buckets", 6)))
-    term_buckets = max(10, int(config.get("dblp_term_frequency_buckets", 10)))
+    author_buckets = max(1, int(config.get("dblp_author_degree_buckets", 4)))
+    paper_buckets = max(1, int(config.get("dblp_paper_degree_buckets", 6)))
+    term_buckets = max(1, int(config.get("dblp_term_frequency_buckets", 10)))
     conference_mode = str(config.get("dblp_conference_type_mode", "identity")).lower()
 
     next_id = 0
@@ -331,7 +359,7 @@ def _dblp_native_bucket_types(config: Dict[str, Any], data: Data) -> torch.Tenso
             labels[int(node_id)] = int(next_id + offset)
         next_id += int(conf_idx.numel())
     else:
-        conf_buckets = max(4, int(config.get("dblp_conference_buckets", 6)))
+        conf_buckets = max(1, int(config.get("dblp_conference_buckets", 6)))
         _assign_degree_buckets(native == 3, conf_buckets, "conference")
 
     data.constraint_type_groups = {group: list(ids) for group, ids in type_groups.items()}
@@ -687,6 +715,10 @@ def _filter_dblp_constraints_by_consequent_matchability(
         from matcher import find_pattern_matches
     except ImportError:
         from .matcher import find_pattern_matches
+    try:
+        from grounding_semantics import constraint_activation_summary
+    except ImportError:
+        from .grounding_semantics import constraint_activation_summary
 
     workload_samples = list(_iter_target_samples(dataset_resource, config))
     min_hits = int(config.get("constraint_target_min_hit", 1))
@@ -694,6 +726,7 @@ def _filter_dblp_constraints_by_consequent_matchability(
     for tgd in constraints:
         workload_hit_count = 0
         consequent_match_count = 0
+        workload_active_count = 0
         for sample in workload_samples:
             try:
                 matches = find_pattern_matches(sample, tgd.get("consequent", {}))
@@ -702,16 +735,24 @@ def _filter_dblp_constraints_by_consequent_matchability(
             if matches:
                 workload_hit_count += 1
                 consequent_match_count += int(len(matches))
+                try:
+                    activation = constraint_activation_summary(sample, [tgd], sample, find_pattern_matches)
+                    if activation.get("active_names"):
+                        workload_active_count += 1
+                except Exception:
+                    pass
         enriched = json.loads(json.dumps(tgd))
         mining = dict(enriched.get("mining", {}))
         mining["target_workload_hit_count"] = int(workload_hit_count)
         mining["target_consequent_match_count"] = int(consequent_match_count)
+        mining["target_workload_active_count"] = int(workload_active_count)
         mining["target_probe_sample_count"] = int(len(workload_samples))
         enriched["mining"] = mining
         audited.append(enriched)
 
     audited.sort(
         key=lambda tgd: (
+            -int(tgd.get("mining", {}).get("target_workload_active_count", 0)),
             -int(tgd.get("mining", {}).get("target_workload_hit_count", 0)),
             -int(tgd.get("mining", {}).get("support", 0)),
             str(tgd.get("mining", {}).get("template", "")),
@@ -735,6 +776,10 @@ def _filter_constraints_by_consequent_matchability(
         from matcher import find_pattern_matches
     except ImportError:
         from .matcher import find_pattern_matches
+    try:
+        from grounding_semantics import constraint_activation_summary
+    except ImportError:
+        from .grounding_semantics import constraint_activation_summary
 
     workload_samples = list(_iter_target_samples(dataset_resource, config))
     min_hits = int(config.get("constraint_target_min_hit", 1))
@@ -742,6 +787,7 @@ def _filter_constraints_by_consequent_matchability(
     for tgd in constraints:
         workload_hit_count = 0
         consequent_match_count = 0
+        workload_active_count = 0
         for sample in workload_samples:
             try:
                 matches = find_pattern_matches(sample, tgd.get("consequent", {}))
@@ -750,16 +796,24 @@ def _filter_constraints_by_consequent_matchability(
             if matches:
                 workload_hit_count += 1
                 consequent_match_count += int(len(matches))
+                try:
+                    activation = constraint_activation_summary(sample, [tgd], sample, find_pattern_matches)
+                    if activation.get("active_names"):
+                        workload_active_count += 1
+                except Exception:
+                    pass
         enriched = json.loads(json.dumps(tgd))
         mining = dict(enriched.get("mining", {}))
         mining["target_workload_hit_count"] = int(workload_hit_count)
         mining["target_consequent_match_count"] = int(consequent_match_count)
+        mining["target_workload_active_count"] = int(workload_active_count)
         mining["target_probe_sample_count"] = int(len(workload_samples))
         enriched["mining"] = mining
         audited.append(enriched)
 
     audited.sort(
         key=lambda tgd: (
+            -int(tgd.get("mining", {}).get("target_workload_active_count", 0)),
             -int(tgd.get("mining", {}).get("target_workload_hit_count", 0)),
             -int(tgd.get("mining", {}).get("support", 0)),
             str(tgd.get("mining", {}).get("template", "")),
@@ -781,6 +835,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
     apc_support: Counter[Tuple[int, int, int]] = Counter()
     aat_support: Counter[Tuple[int, int, int]] = Counter()
     aac_support: Counter[Tuple[int, int, int]] = Counter()
+    app_support: Counter[Tuple[int, int, int]] = Counter()
+    apa_support: Counter[Tuple[int, int, int]] = Counter()
 
     for sample in samples:
         subtype = _node_type_vector(sample)
@@ -791,6 +847,30 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
         apc_seen: Set[Tuple[int, int, int]] = set()
         aat_seen: Set[Tuple[int, int, int]] = set()
         aac_seen: Set[Tuple[int, int, int]] = set()
+        app_seen: Set[Tuple[int, int, int]] = set()
+        apa_seen: Set[Tuple[int, int, int]] = set()
+
+        for author in range(int(sample.num_nodes)):
+            if native[author] != 0:
+                continue
+            papers = [nbr for nbr, rel in neighbors[author] if rel == 0 and native[nbr] == 1]
+            for i in range(len(papers)):
+                for j in range(i + 1, len(papers)):
+                    p1_sub = int(subtype[papers[i]])
+                    p2_sub = int(subtype[papers[j]])
+                    lo, hi = sorted((p1_sub, p2_sub))
+                    app_seen.add((int(subtype[author]), lo, hi))
+
+        for paper in range(int(sample.num_nodes)):
+            if native[paper] != 1:
+                continue
+            authors = [nbr for nbr, rel in neighbors[paper] if rel == 0 and native[nbr] == 0]
+            for i in range(len(authors)):
+                for j in range(i + 1, len(authors)):
+                    a1_sub = int(subtype[authors[i]])
+                    a2_sub = int(subtype[authors[j]])
+                    lo, hi = sorted((a1_sub, a2_sub))
+                    apa_seen.add((lo, int(subtype[paper]), hi))
 
         for paper in range(int(sample.num_nodes)):
             if native[paper] != 1:
@@ -832,6 +912,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
         apc_support.update(apc_seen)
         aat_support.update(aat_seen)
         aac_support.update(aac_seen)
+        app_support.update(app_seen)
+        apa_support.update(apa_seen)
 
     max_patterns = int(config.get("constraint_max_patterns", 64))
     max_per_template = int(config.get("dblp_max_patterns_per_template", max(8, max_patterns // 4)))
@@ -869,6 +951,40 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_apc_backchase",
+            )
+        )
+
+    for (a_sub, p1_sub, p2_sub), support in _top(app_support):
+        nodes_spec = {
+            "A": {"in": [int(a_sub)]},
+            "P1": {"in": [int(p1_sub)]},
+            "P2": {"in": [int(p2_sub)]},
+        }
+        motif_edges = [("A", "P1", 0), ("A", "P2", 0)]
+        constraints.extend(
+            _emit_dblp_backchase_variants(
+                prefix=f"mined_dblp_app_{a_sub}_{p1_sub}_{p2_sub}",
+                nodes_spec=nodes_spec,
+                motif_edges=motif_edges,
+                support=int(support),
+                template="dblp_author_multi_paper_backchase",
+            )
+        )
+
+    for (a1_sub, p_sub, a2_sub), support in _top(apa_support):
+        nodes_spec = {
+            "A1": {"in": [int(a1_sub)]},
+            "P": {"in": [int(p_sub)]},
+            "A2": {"in": [int(a2_sub)]},
+        }
+        motif_edges = [("A1", "P", 0), ("A2", "P", 0)]
+        constraints.extend(
+            _emit_dblp_backchase_variants(
+                prefix=f"mined_dblp_apa_{a1_sub}_{p_sub}_{a2_sub}",
+                nodes_spec=nodes_spec,
+                motif_edges=motif_edges,
+                support=int(support),
+                template="dblp_coauthor_paper_backchase",
             )
         )
 
@@ -914,6 +1030,7 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
     constraints = _filter_dblp_constraints_by_consequent_matchability(constraints, dataset_resource, config)
     constraints.sort(
         key=lambda tgd: (
+            -int(tgd.get("mining", {}).get("target_workload_active_count", 0)),
             -int(tgd.get("mining", {}).get("target_workload_hit_count", 0)),
             -int(tgd.get("mining", {}).get("support", 0)),
             str(tgd.get("mining", {}).get("template", "")),
@@ -1108,6 +1225,7 @@ def _write_constraint_bundle(path: str, dataset_key: str, source: str, type_sour
             "constraint_max_patterns": int(config.get("constraint_max_patterns", 8)),
             "constraint_mining_hops": int(config.get("constraint_mining_hops", config.get("L", 2))),
             "constraint_mining_max_samples": int(config.get("constraint_mining_max_samples", 64)),
+            "constraint_ranking_version": str(config.get("constraint_ranking_version", "activehit_v1")).lower(),
         },
     }
     with open(path, "w", encoding="utf-8") as handle:
@@ -1124,13 +1242,24 @@ def resolve_constraints(
     dataset_key = str(config.get("data_name", "dataset")).upper()
     source = str(config.get("constraint_source", "static")).lower()
     type_source = str(config.get("constraint_type_source", "pseudo_type")).lower()
+    resolved_file_value = config.get("constraint_resolved_file")
 
     prepare_constraint_types(config, dataset_resource, model=model, device=device)
 
     static_constraints = _clone_constraints(get_constraints(dataset_key))
     constraints: List[TGD]
 
-    if source == "static":
+    if resolved_file_value:
+        resolved_file = Path(str(resolved_file_value)).expanduser()
+        if not resolved_file.is_absolute():
+            resolved_file = (ROOT_DIR / resolved_file).resolve()
+        if not resolved_file.exists():
+            raise FileNotFoundError(f"Resolved constraint file not found: {resolved_file}")
+        with open(resolved_file, "r", encoding="utf-8") as handle:
+            bundle = json.load(handle)
+        constraints = list(bundle.get("constraints", []))
+        config["_resolved_constraint_file"] = str(resolved_file)
+    elif source == "static":
         constraints = static_constraints
     else:
         cache_path = _cache_path(config, dataset_key)
@@ -1159,7 +1288,10 @@ def resolve_constraints(
         else:
             constraints = mined_constraints
 
-    constraints = _apply_constraint_pool_mode(constraints, config, dataset_key)
+    if resolved_file_value:
+        config["_resolved_constraint_pool_mode"] = "resolved_file"
+    else:
+        constraints = _apply_constraint_pool_mode(constraints, config, dataset_key)
 
     constraint_limit = config.get("constraint_limit", config.get("sigma_size"))
     if constraint_limit is not None:

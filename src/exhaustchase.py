@@ -53,6 +53,53 @@ def _constraint_names(constraints) -> List[str]:
             names.append(str(c))
     return names
 
+
+def _parse_edge_spec(edge: Sequence) -> Tuple[Any, Any, Optional[set]]:
+    if not isinstance(edge, (tuple, list)):
+        raise ValueError(f"Unsupported edge spec: {edge}")
+    if len(edge) == 2:
+        return edge[0], edge[1], None
+    if len(edge) != 3:
+        raise ValueError(f"Unsupported edge spec length: {edge}")
+    rel_spec = edge[2]
+    if rel_spec is None:
+        return edge[0], edge[1], None
+    if isinstance(rel_spec, dict):
+        rel_allowed = rel_spec.get("rel_in", rel_spec.get("in", []))
+        return edge[0], edge[1], set(rel_allowed)
+    if isinstance(rel_spec, (list, tuple, set)):
+        return edge[0], edge[1], set(rel_spec)
+    return edge[0], edge[1], {rel_spec}
+
+
+def _edge_exists_with_rel(graph: Data, u: int, v: int, allowed_rel: Optional[set]) -> bool:
+    if getattr(graph, "edge_index", None) is None or graph.edge_index.numel() == 0:
+        return False
+    edge_index = graph.edge_index
+    rel_tensor = getattr(graph, "edge_rel_type", None)
+    for col in range(edge_index.size(1)):
+        a = int(edge_index[0, col])
+        b = int(edge_index[1, col])
+        if not ((a == u and b == v) or (a == v and b == u)):
+            continue
+        if allowed_rel is None:
+            return True
+        rel_type = None
+        if isinstance(rel_tensor, torch.Tensor) and rel_tensor.numel() == edge_index.size(1):
+            rel_type = int(rel_tensor[col])
+        if rel_type in allowed_rel:
+            return True
+    return False
+
+
+def _singleton_rel_id(allowed_rel: Optional[set]) -> Optional[int]:
+    if not allowed_rel or len(allowed_rel) != 1:
+        return None
+    try:
+        return int(next(iter(allowed_rel)))
+    except Exception:
+        return None
+
 # ----------------------------- Helper dataclasses -----------------------------
 
 @dataclass
@@ -457,7 +504,14 @@ class ExhaustChase:
 
     def _exhaustive_enforce(self, H: Data) -> Tuple[Data, float, int]:
         """
-        Exhaustively enforce all TGD rules until no violations remain.
+        Exhaustively enforce all TGDs with standard forward chase semantics.
+
+        For each rule φ = (P, c):
+          - match antecedent P on the current observed-local graph
+          - if the consequent edge c is missing under that same binding, add it
+
+        This clean/materialization phase is distinct from witness grounding:
+        backchase is only used later when evaluating witness coverage.
         
         Returns:
             - Cleaned graph (Data)
@@ -480,57 +534,62 @@ class ExhaustChase:
             if self.debug:
                 self._log(f"Enforcement iteration {iteration}: checking {len(self.Sigma)} TGDs")
             
-            # Check all TGDs for violations
+            # Check all TGDs for forward-chase violations
             for tgd in self.Sigma:
                 try:
                     name = tgd.get('name', 'unnamed') if isinstance(tgd, dict) else str(tgd)
                 except Exception:
                     name = str(tgd)
                 
-                # Find consequent matches
+                antecedent = tgd.get("antecedent", {}) if isinstance(tgd, dict) else {}
+                consequent = tgd.get("consequent", {}) if isinstance(tgd, dict) else {}
+                consequent_edges = list(consequent.get("edges", []))
+                if not antecedent or not consequent_edges:
+                    continue
+
+                # Standard chase trigger: match P on the current graph.
                 try:
-                    matches = find_pattern_matches(H_clean, tgd.get("consequent", {}))
+                    matches = find_pattern_matches(H_clean, antecedent)
                 except Exception:
                     matches = []
                 
                 if not matches:
                     continue
                 
-                # Check each match for antecedent violations and repair if needed
+                # For each antecedent match, enforce the consequent edge(s).
                 for binding in matches:
                     try:
-                        # Check if P is satisfied under the matched consequent binding.
-                        feasible, rep_cost, repairs = backchase_repair_cost(
-                            H_clean,
-                            tgd.get("antecedent", {}),
-                            binding,
-                            self.B,
-                        )
-                        
-                        if not feasible or rep_cost > 0:
-                            # There is a violation - need to repair
+                        for edge_spec in consequent_edges:
+                            u_var, v_var, allowed_rel = _parse_edge_spec(edge_spec)
+                            if u_var not in binding or v_var not in binding:
+                                if self.debug:
+                                    self._log(
+                                        f"  Skip chase repair for '{name}': consequent vars "
+                                        f"({u_var}, {v_var}) are not bound by antecedent match."
+                                    )
+                                continue
+
+                            u = int(binding[u_var])
+                            v = int(binding[v_var])
+                            if _edge_exists_with_rel(H_clean, u, v, allowed_rel):
+                                continue
+
                             violations_found = True
                             repairs_this_iter += 1
-                            
-                            # Apply repairs by adding missing edges
-                            rel_id = None
-                            if isinstance(tgd, dict):
-                                antecedent_edges = list(tgd.get("antecedent", {}).get("edges", []))
-                                if len(antecedent_edges) == 1 and len(antecedent_edges[0]) >= 3:
-                                    rel_id = int(antecedent_edges[0][2])
-                            for u, v in repairs:
-                                if u >= 0 and v >= 0:  # Skip placeholder repairs (-1, -1)
-                                    # Add edge to H_clean
-                                    new_edge = torch.tensor([[u], [v]], dtype=torch.long, device=H_clean.edge_index.device)
-                                    H_clean.edge_index = torch.cat([H_clean.edge_index, new_edge], dim=1)
-                                    if hasattr(H_clean, "edge_rel_type") and H_clean.edge_rel_type is not None:
-                                        if rel_id is None:
-                                            new_rel = torch.full((1,), -1, dtype=H_clean.edge_rel_type.dtype, device=H_clean.edge_rel_type.device)
-                                        else:
-                                            new_rel = torch.full((1,), rel_id, dtype=H_clean.edge_rel_type.dtype, device=H_clean.edge_rel_type.device)
-                                        H_clean.edge_rel_type = torch.cat([H_clean.edge_rel_type, new_rel], dim=0)
-                                    if self.debug:
-                                        self._log(f"  Repaired: added edge ({u}, {v}) for TGD '{name}'")
+
+                            new_edge = torch.tensor([[u], [v]], dtype=torch.long, device=H_clean.edge_index.device)
+                            H_clean.edge_index = torch.cat([H_clean.edge_index, new_edge], dim=1)
+                            if hasattr(H_clean, "edge_rel_type") and H_clean.edge_rel_type is not None:
+                                rel_id = _singleton_rel_id(allowed_rel)
+                                if rel_id is None:
+                                    new_rel = torch.full((1,), -1, dtype=H_clean.edge_rel_type.dtype, device=H_clean.edge_rel_type.device)
+                                else:
+                                    new_rel = torch.full((1,), rel_id, dtype=H_clean.edge_rel_type.dtype, device=H_clean.edge_rel_type.device)
+                                H_clean.edge_rel_type = torch.cat([H_clean.edge_rel_type, new_rel], dim=0)
+                            if self.debug:
+                                self._log(
+                                    f"  Chase repaired '{name}': added consequent edge ({u}, {v})"
+                                )
                     except Exception as e:
                         if self.debug:
                             self._log(f"  Error checking/repairing TGD '{name}': {e}")

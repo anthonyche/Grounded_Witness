@@ -8,7 +8,7 @@
 
 run_name: manual_dblp
 dataset: dblp
-model_name: gcn2
+model_name: gcn1
 methods:
   - ApxC
   - HeuC
@@ -30,7 +30,7 @@ reuse_observed_graph_cache: true
 random_seed: 42
 sigma_size: 20
 local_budget_k: 2
-L: 2
+L: 1
 gamma: 1.0
 alpha: 0.5
 beta: 0.5
@@ -131,7 +131,7 @@ target_nodes:
 constraint_source: mined
 constraint_rule_mode: standard_backchase
 constraint_filter_target_matchability: true
-constraint_pool_mode: balanced
+constraint_pool_mode: original
 # 可选：
 #   - original
 #   - balanced

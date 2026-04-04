@@ -19,6 +19,12 @@ METHOD_SPECS = {
     "exhaustchase": {"exp_prefix": "exhaustchase", "label": "Exh"},
 }
 
+DBLP_FROZEN_CONSTRAINT_POOLS = {
+    ("gcn1", 1): ROOT / "artifacts" / "constraints" / "dblp_gcn1_L1_specialized_resolved.json",
+    ("gcn2", 2): ROOT / "artifacts" / "constraints" / "dblp_gcn2_L2_specialized_resolved.json",
+    ("gcn3", 3): ROOT / "artifacts" / "constraints" / "dblp_gcn3_L3_specialized_resolved.json",
+}
+
 
 def load_yaml(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
@@ -157,6 +163,37 @@ def build_run_config(
     merged["k"] = int(merged["K"])
     merged["local_budget_k"] = int(merged.get("local_budget_k", merged.get("Budget", 2)))
     merged["Budget"] = int(merged["local_budget_k"])
+    # Keep mined constraint neighborhoods aligned with the explanation L-hop
+    # setting unless the caller explicitly overrides constraint_mining_hops.
+    explicit_base = exp_cfg.get("base", {}) or {}
+    if "constraint_mining_hops" not in explicit_base and "constraint_mining_hops" not in combo:
+        merged["constraint_mining_hops"] = int(merged.get("L", 2))
+    # DBLP needs L-specific constraint typing/mining defaults. The 2-hop setup
+    # keeps the original native bucket granularity; 1-hop/3-hop use a coarser
+    # bucket schedule plus lower support to keep the mined pool non-empty while
+    # remaining graph-structural.
+    dataset_name = str(dataset_cfg.get("data_name", "")).upper()
+    explicit_type_source = "constraint_type_source" in explicit_base or "constraint_type_source" in combo
+    explicit_support = "constraint_min_support" in explicit_base or "constraint_min_support" in combo
+    explicit_author_buckets = "dblp_author_degree_buckets" in explicit_base or "dblp_author_degree_buckets" in combo
+    explicit_paper_buckets = "dblp_paper_degree_buckets" in explicit_base or "dblp_paper_degree_buckets" in combo
+    explicit_term_buckets = "dblp_term_frequency_buckets" in explicit_base or "dblp_term_frequency_buckets" in combo
+    explicit_resolved_file = "constraint_resolved_file" in explicit_base or "constraint_resolved_file" in combo
+    if dataset_name == "DBLP" and int(merged.get("constraint_mining_hops", merged.get("L", 2))) != 2:
+        if not explicit_type_source and str(merged.get("constraint_type_source", "")).lower() in {"dblp_native_bucket", "native_bucket"}:
+            merged["constraint_type_source"] = "dblp_native_bucket"
+        if not explicit_support:
+            merged["constraint_min_support"] = 1
+        if not explicit_author_buckets:
+            merged["dblp_author_degree_buckets"] = 2
+        if not explicit_paper_buckets:
+            merged["dblp_paper_degree_buckets"] = 3
+        if not explicit_term_buckets:
+            merged["dblp_term_frequency_buckets"] = 4
+    if dataset_name == "DBLP" and not explicit_resolved_file:
+        frozen_pool = DBLP_FROZEN_CONSTRAINT_POOLS.get((resolved_model_key, int(merged.get("L", 2))))
+        if frozen_pool is not None and frozen_pool.exists():
+            merged["constraint_resolved_file"] = str(frozen_pool)
     merged["incompleteness"] = float(merged.get("incompleteness", merged.get("mask_ratio", 0.05)))
     merged["mask_ratio"] = float(merged["incompleteness"])
     merged["sigma_size"] = int(merged.get("sigma_size", merged.get("constraint_limit", 20)))

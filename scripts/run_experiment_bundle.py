@@ -489,6 +489,13 @@ def main() -> None:
 
     csv_root = ROOT / "outputs" / "csv"
     csv_root.mkdir(parents=True, exist_ok=True)
+    per_workload_path = csv_root / f"{run_name}_per_workload.csv"
+    method_summary_path = csv_root / f"{run_name}_method_summary.csv"
+    metadata_path = csv_root / f"{run_name}_metadata.json"
+    if args.force or bool(bundle_cfg.get("force", False)):
+        for stale_path in (per_workload_path, method_summary_path, metadata_path):
+            if stale_path.exists():
+                stale_path.unlink()
     script_path = resolved_entry_script(dataset_cfg, {"runner_script": None})
 
     predicted_type_sources = {"predicted", "predicted_label", "model_prediction"}
@@ -550,20 +557,16 @@ def main() -> None:
             method_summary_rows.append(summary)
             factor_meta["methods"].append(summary)
 
-            per_workload_path = csv_root / f"{run_name}_per_workload.csv"
-            method_summary_path = csv_root / f"{run_name}_method_summary.csv"
             pd.DataFrame(per_workload_rows).to_csv(per_workload_path, index=False)
             pd.DataFrame(method_summary_rows).to_csv(method_summary_path, index=False)
 
         metadata["factors"].append(factor_meta)
         metadata["updated_at"] = time.time()
-        metadata_path = csv_root / f"{run_name}_metadata.json"
         with open(metadata_path, "w", encoding="utf-8") as handle:
             json.dump(metadata, handle, indent=2, ensure_ascii=False)
 
     metadata["finished_at"] = time.time()
     metadata["duration_sec"] = metadata["finished_at"] - metadata["started_at"]
-    metadata_path = csv_root / f"{run_name}_metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, ensure_ascii=False)
 
