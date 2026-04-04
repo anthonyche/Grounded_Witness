@@ -1,0 +1,19 @@
+name: full_conciseness_vs_gamma_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - exhaustchase
+model_keys:
+  - default
+base:
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep:
+  gamma: [0.2, 0.4, 0.6, 0.8, 1.0]
+

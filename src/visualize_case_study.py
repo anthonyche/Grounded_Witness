@@ -26,12 +26,12 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_constraint_coverage
+from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_direct_constraint_coverage
 from model import get_model
 from apxchase import ApxChase
-from apxchase_mutag import ApxChase as ApxChaseMUTAG  # Import MUTAG-specific version
 from exhaustchase import ExhaustChase
 from constraints import get_constraints
+from constraint_mining import resolve_constraints
 
 from Edge_masking import mask_edges_by_constraints
 from baselines import run_gnn_explainer_graph, PGExplainerBaseline
@@ -40,9 +40,9 @@ import time
 
 try:
     # Optional debug-only matcher hook (may not be available in all setups).
-    from matcher import find_head_matches as _head_match_fn  # type: ignore
+    from matcher import find_pattern_matches as _pattern_match_fn  # type: ignore
 except Exception:
-    _head_match_fn = None
+    _pattern_match_fn = None
 
 # Restrict OpenMP / BLAS thread usage to avoid shared-memory initialisation failures in sandboxed environments.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -447,13 +447,13 @@ def _debug_list_constraints(constraints: List[dict]) -> None:
     print(f"[DEBUG] Loaded {len(constraints)} constraints:")
     for i, c in enumerate(constraints):
         name = c.get("name", f"constraint_{i}")
-        head_edges = len(c.get("head", {}).get("edges", [])) if isinstance(c.get("head"), dict) else "?"
-        body_edges = len(c.get("body", {}).get("edges", [])) if isinstance(c.get("body"), dict) else "?"
-        print(f"  - {name} (head_edges={head_edges}, body_edges={body_edges})")
+        consequent_edges = len(c.get("consequent", {}).get("edges", [])) if isinstance(c.get("consequent"), dict) else "?"
+        antecedent_edges = len(c.get("antecedent", {}).get("edges", [])) if isinstance(c.get("antecedent"), dict) else "?"
+        print(f"  - {name} (consequent_edges={consequent_edges}, antecedent_edges={antecedent_edges})")
 
-def _debug_scan_head_matches(graph: Data, constraints: List[dict], tag: str) -> None:
-    if _head_match_fn is None:
-        print(f"[DEBUG] Skipping head-match scan for '{tag}': matcher.find_matches not available.")
+def _debug_scan_consequent_matches(graph: Data, constraints: List[dict], tag: str) -> None:
+    if _pattern_match_fn is None:
+        print(f"[DEBUG] Skipping consequent-match scan for '{tag}': matcher unavailable.")
         return
     try:
         num_nodes = int(graph.num_nodes)
@@ -461,17 +461,14 @@ def _debug_scan_head_matches(graph: Data, constraints: List[dict], tag: str) -> 
     except Exception:
         num_nodes = getattr(graph, "num_nodes", "?")
         num_edges = getattr(getattr(graph, "edge_index", None), "size", lambda *_: ["?","?"])(1)
-    print(f"[DEBUG] Head-match scan on '{tag}' graph (|V|={num_nodes}, |E|={num_edges})")
+    print(f"[DEBUG] Consequent-match scan on '{tag}' graph (|V|={num_nodes}, |E|={num_edges})")
     for c in constraints:
         name = c.get("name", "?")
-        head = c.get("head", {})
         try:
-            # matcher.find_head_matches expects the full constraint (with a "head" key),
-            # not just the head-pattern. Pass the entire constraint to avoid KeyError('head').
-            matches = _head_match_fn(graph, c)  # returns: list of dict assignments
-            print(f"    - {name}: head matches = {len(matches)}")
+            matches = _pattern_match_fn(graph, c.get("consequent", {}))
+            print(f"    - {name}: consequent matches = {len(matches)}")
         except Exception as e:
-            print(f"    - {name}: head scan error: {e}")
+            print(f"    - {name}: consequent scan error: {e}")
 
 
 # === Helper functions for running a single graph for each experiment type ===
@@ -480,7 +477,7 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
     true_label = int(graph.y.item()) if hasattr(graph, "y") and graph.y is not None else None
 
     base_graph = _prepare_graph_for_model(graph)
-    _debug_scan_head_matches(base_graph, constraints, tag="original")
+    _debug_scan_consequent_matches(base_graph, constraints, tag="original")
 
     masked_graph, dropped_edges = mask_edges_by_constraints(
         base_graph,
@@ -489,10 +486,10 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
         seed=config.get("random_seed"),
         preserve_connectivity=config.get("preserve_connectivity", True),
     )
-    _debug_scan_head_matches(masked_graph, constraints, tag="masked")
-    masked_graph._clean = base_graph
+    _debug_scan_consequent_matches(masked_graph, constraints, tag="masked")
+    masked_graph._clean = base_graph.clone()
+    masked_graph._query_graph = base_graph.clone()
     masked_graph.y = graph.y.clone()
-
     masked_graph = _graph_to_device(masked_graph, device)
     with torch.no_grad():
         logits = chaser.model(masked_graph)
@@ -565,9 +562,9 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
     print(f"Witness count (|W_k|): {len(witnesses)}")
     if len(witnesses) == 0:
         print("[DEBUG] No witnesses were admitted. Hints:")
-        print("  - Check if any constraint heads match on the masked graph (see head-match scan above).")
+        print("  - Check if any constraint consequents match on the observed graph (see consequent-match scan above).")
         print("  - Consider increasing Budget B, or adjusting masking to remove an aromatic/structural edge.")
-        print("  - Ensure matcher uses HEAD->BODY (backchase) direction when triggering repairs.")
+        print("  - Ensure matcher uses consequent-to-antecedent backchase direction when triggering repairs.")
     print(f"Covered constraints ({len(coverage_names)}): {coverage_names}")
 
     save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
@@ -645,7 +642,8 @@ def _run_one_graph_apxchase(pos: int, dataset_resource: Dict[str, Any], dataset:
     with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
         json.dump(metrics, fp, indent=2)
 
-    torch.save(masked_graph.cpu(), os.path.join(save_root, f"masked_graph_{dataset_idx}.pt"))
+    torch.save(base_graph.cpu(), os.path.join(save_root, f"clean_graph_{dataset_idx}.pt"))
+    torch.save(masked_graph.cpu(), os.path.join(save_root, f"observed_graph_{dataset_idx}.pt"))
     return elapsed, len(witnesses), avg_fidelity, avg_conciseness, coverage_ratio
 
 
@@ -705,7 +703,7 @@ def _run_one_graph_gnnexplainer(pos: int, dataset_resource: Dict[str, Any], data
         # 计算 Coverage: 使用与ApxChase相同的constraint matching逻辑
         Budget = config.get("Budget", 8)
         subgraph_cpu = subgraph.cpu()
-        covered_constraints, coverage_ratio = compute_constraint_coverage(subgraph_cpu, constraints, Budget)
+        covered_constraints, coverage_ratio = compute_direct_constraint_coverage(subgraph_cpu, constraints)
 
     save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
     os.makedirs(save_root, exist_ok=True)
@@ -859,7 +857,7 @@ def _run_one_graph_pgexplainer(pos: int, dataset_resource: Dict[str, Any], datas
         # 计算 Coverage: 使用与ApxChase相同的constraint matching逻辑
         Budget = config.get("Budget", 8)
         subgraph_cpu = subgraph.cpu()
-        covered_constraints, coverage_ratio = compute_constraint_coverage(subgraph_cpu, constraints, Budget)
+        covered_constraints, coverage_ratio = compute_direct_constraint_coverage(subgraph_cpu, constraints)
 
     save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment")) if config.get("save_dir") is None else config.get("save_dir")
     os.makedirs(save_root, exist_ok=True)
@@ -947,7 +945,7 @@ def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], data
 
     base_graph = _prepare_graph_for_model(graph)
     if verbose:
-        _debug_scan_head_matches(base_graph, constraints, tag="original")
+        _debug_scan_consequent_matches(base_graph, constraints, tag="original")
 
     masked_graph, dropped_edges = mask_edges_by_constraints(
         base_graph,
@@ -957,10 +955,10 @@ def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], data
         preserve_connectivity=config.get("preserve_connectivity", True),
     )
     if verbose:
-        _debug_scan_head_matches(masked_graph, constraints, tag="masked")
-    masked_graph._clean = base_graph
+        _debug_scan_consequent_matches(masked_graph, constraints, tag="masked")
+    masked_graph._clean = base_graph.clone()
+    masked_graph._query_graph = base_graph.clone()
     masked_graph.y = graph.y.clone()
-
     masked_graph = _graph_to_device(masked_graph, device)
     with torch.no_grad():
         logits = chaser.model(masked_graph)
@@ -1054,7 +1052,8 @@ def _run_one_graph_exhaustchase(pos: int, dataset_resource: Dict[str, Any], data
     with open(os.path.join(save_root, f"metrics_graph_{dataset_idx}.json"), "w", encoding="utf-8") as fp:
         json.dump(metrics, fp, indent=2)
 
-    torch.save(masked_graph.cpu(), os.path.join(save_root, f"masked_graph_{dataset_idx}.pt"))
+    torch.save(base_graph.cpu(), os.path.join(save_root, f"clean_graph_{dataset_idx}.pt"))
+    torch.save(masked_graph.cpu(), os.path.join(save_root, f"observed_graph_{dataset_idx}.pt"))
     
     # Return total elapsed time (including enforcement overhead)
     return total_elapsed, len(witnesses), avg_fidelity, avg_conciseness, coverage_ratio
@@ -1081,6 +1080,9 @@ def main() -> None:
     graph_index = args.input if args.input is not None else config.get("graph_index", 0)
     max_masks = config.get("max_masks", 1)
     save_root = args.output or config.get("save_dir") or get_save_path(config["data_name"], config.get("exp_name", "default_experiment"))
+    config["save_dir"] = save_root
+    window_size = int(config.get("K", config.get("k", 10)))
+    local_budget = int(config.get("local_budget_k", config.get("Budget", 4)))
 
     set_seed(config.get("random_seed", 0))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1096,18 +1098,17 @@ def main() -> None:
     dataset = dataset_resource["dataset"]
 
     # Shared resources: constraints, model, chaser
-    constraints = get_constraints(config.get("data_name", "MUTAG"))
-    _debug_list_constraints(constraints)
-
     model = _load_trained_model(config, device)
+    constraints = resolve_constraints(config, dataset_resource, model=model, device=device, save_dir=save_root)
+    _debug_list_constraints(constraints)
     
     # Use MUTAG-specific ApxChase with BFS-based multi-center strategy for connected explanations
     chaser = ApxChaseMUTAG(
         model=model,
         Sigma=constraints,
         L=config.get("L", 2),
-        k=config.get("k", 10),
-        B=config.get("Budget", 4),
+        k=window_size,
+        B=local_budget,
         alpha=config.get("alpha", 1.0),
         beta=config.get("beta", 1.0),
         gamma=config.get("gamma", 1.0),
@@ -1115,13 +1116,17 @@ def main() -> None:
         num_centers=10,  # Not used anymore - we process all nodes as centers
     )
 
-    exp_name = str(config.get("exp_name", "apxchase_mutag")).lower()
+    exp_name = str(config.get("exp_name", "apxchase")).lower()
 
     # Decide which test positions to run
     test_subset = dataset_resource["test_loader"].dataset
     test_indices = list(test_subset.indices)
+    configured_positions = config.get("graph_positions")
     if args.run_all:
-        test_positions = list(range(len(test_indices)))
+        if configured_positions:
+            test_positions = [int(pos) for pos in configured_positions]
+        else:
+            test_positions = list(range(len(test_indices)))
     else:
         graph_index = args.input if args.input is not None else config.get("graph_index", 0)
         if graph_index < 0 or graph_index >= len(test_indices):
@@ -1191,8 +1196,8 @@ def main() -> None:
             coverage_scores.append(cov)
 
     elif exp_name.startswith("heuchase"):
-        from heuchase_mutag import HeuChaseMUTAG
-        chaser = HeuChaseMUTAG(
+        from heuchase import HeuChase
+        chaser = HeuChase(
             model=model,
             Sigma=constraints,
             L=config.get("L", 2),
@@ -1215,7 +1220,7 @@ def main() -> None:
             coverage_scores.append(cov)
 
     else:
-        raise ValueError(f"Unknown exp_name '{exp_name}'. Expected one of: apxchase_mutag, exhaustchase_mutag, heuchase_mutag, gnnexplainer_mutag, pgexplainer_mutag")
+        raise ValueError(f"Unknown exp_name '{exp_name}'. Expected one of: apxchase, exhaustchase, heuchase, gnnexplainer, pgexplainer")
 
     # === Final aggregate stats over the run ===
     num_graphs_run = len(test_positions)

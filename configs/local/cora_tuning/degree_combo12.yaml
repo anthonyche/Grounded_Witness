@@ -1,0 +1,13 @@
+name: cora_tuning_degree_combo12
+description: Training-only feature cluster and degree bucket combination.
+overrides:
+  constraint_source: hybrid
+  constraint_type_source: pseudo_type_degree_combo
+  n_node_types: 12
+  pseudo_cluster_types: 12
+  pseudo_degree_buckets: 4
+  apx_seed_per_constraint: 2
+  apx_candidate_branch_factor: 3
+  apx_candidate_beam_width: 6
+  apx_candidate_max_masks: 48
+  apx_ranking_pool_factor: 3

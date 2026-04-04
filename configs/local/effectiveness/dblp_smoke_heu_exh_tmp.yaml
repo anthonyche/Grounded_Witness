@@ -1,0 +1,16 @@
+name: dblp_smoke
+group: smoke
+datasets:
+- dblp
+methods:
+- heuchase
+- exhaustchase
+model_keys:
+- default
+base:
+  target_ratio: 0.001
+  max_targets: 3
+  constraint_source: mined
+  constraint_type_source: dblp_native_bucket
+  preserve_connectivity: true
+  max_masks: 1

@@ -1,0 +1,36 @@
+data_name: DBLP
+task: node
+default_model_key: gcn2
+min_targets: 1
+default_target_ratio: 0.01
+models:
+  gcn1: gcn1
+  gcn2: gcn2
+  gcn3: gcn3
+  gat2: gat2
+  sage2: sage2
+  gat3: gat3
+  sage3: sage3
+config:
+  data_size: 4057
+  input_dim: 132
+  output_dim: 4
+  num_test: 800
+  target_ratio: 0.01
+  dblp_projection_dim: 128
+  preserve_connectivity: true
+  constraint_source: mined
+  constraint_type_source: dblp_native_bucket
+  constraint_rule_mode: standard_backchase
+  constraint_filter_target_matchability: true
+  constraint_target_probe_samples: 64
+  constraint_target_min_hit: 1
+  constraint_mining_hops: 2
+  constraint_mining_max_samples: 64
+  constraint_max_patterns: 64
+  constraint_min_support: 2
+  dblp_max_patterns_per_template: 20
+  dblp_author_degree_buckets: 4
+  dblp_paper_degree_buckets: 6
+  dblp_term_frequency_buckets: 10
+  dblp_conference_type_mode: identity

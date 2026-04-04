@@ -16,7 +16,7 @@ External hooks (pluggable) — functions with the `_fn` suffix can be overridden
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import heapq
 
 from itertools import count
@@ -33,10 +33,12 @@ from torch_geometric.utils import k_hop_subgraph, to_undirected
 # `src.apxchase` or plain `apxchase`.
 try:
     from constraints import get_constraints  # optional
-    from matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+    from matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
 except ImportError:
     from .constraints import get_constraints  # optional
-    from .matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+    from .matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from .grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
 
 
 def _constraint_names(constraints) -> List[str]:
@@ -63,6 +65,766 @@ class WindowEntry:
     # heapq in python is a min-heap based on the first tuple field (score)
     def as_tuple(self):
         return (self.score, next(_HEAP_SEQ), self.Gs)
+
+
+@dataclass
+class SeedInfo:
+    constraint_name: str
+    mask: Tensor
+    estimated_grounding_cost: int
+    consequent_match_count: int
+    target_relevance: float
+    priority: float
+
+
+def _edge_mask_signature(edge_mask: Tensor) -> Tuple[int, ...]:
+    return tuple(torch.nonzero(edge_mask, as_tuple=False).flatten().detach().cpu().tolist())
+
+
+def _mask_edge_set(H: Data, edge_mask: Tensor) -> Set[Tuple[int, int]]:
+    out: Set[Tuple[int, int]] = set()
+    for idx in torch.nonzero(edge_mask, as_tuple=False).flatten().tolist():
+        u = int(H.edge_index[0, idx])
+        v = int(H.edge_index[1, idx])
+        out.add((u, v) if u <= v else (v, u))
+    return out
+
+
+def _mask_contains(mask: Tensor, other: Tensor) -> bool:
+    return not bool((other & (~mask)).any())
+
+
+def _node_hops(H: Data, root: Optional[int]) -> Optional[List[int]]:
+    if root is None:
+        return None
+    from collections import deque
+
+    N = int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else H.x.size(0))
+    adj = [[] for _ in range(N)]
+    und = to_undirected(H.edge_index)
+    for u, v in und.t().tolist():
+        adj[int(u)].append(int(v))
+        adj[int(v)].append(int(u))
+    dist = [-1] * N
+    q = deque([int(root)])
+    dist[int(root)] = 0
+    while q:
+        u = q.popleft()
+        for w in adj[u]:
+            if dist[w] == -1:
+                dist[w] = dist[u] + 1
+                q.append(w)
+    return dist
+
+
+def _mask_target_relevance(H: Data, edge_mask: Tensor, root: Optional[int], hops: Optional[List[int]], L: int) -> float:
+    if root is None or hops is None:
+        return 0.5
+    nodes = _nodes_from_mask(H, edge_mask, root)
+    if not nodes:
+        return 0.0
+    finite_hops = [hops[int(node)] for node in nodes if 0 <= int(node) < len(hops) and hops[int(node)] >= 0]
+    if not finite_hops:
+        return 0.0
+    avg_hop = sum(finite_hops) / len(finite_hops)
+    return max(0.0, 1.0 - (avg_hop / max(1, L)))
+
+
+def _constraint_name(tgd: object) -> str:
+    if isinstance(tgd, dict):
+        return str(tgd.get('name', str(tgd)))
+    return str(getattr(tgd, 'name', tgd))
+
+
+def _diversity_distance(sig_a: Tuple[int, ...], sig_b: Tuple[int, ...]) -> float:
+    if not sig_a and not sig_b:
+        return 0.0
+    set_a = set(sig_a)
+    set_b = set(sig_b)
+    denom = len(set_a | set_b)
+    if denom == 0:
+        return 0.0
+    return 1.0 - (len(set_a & set_b) / float(denom))
+
+
+def _select_diverse_ranked_masks(
+    scored_masks: Sequence[Tuple[float, Tensor]],
+    max_keep: int,
+    diversity_bonus: float,
+) -> List[Tensor]:
+    pool: List[Tuple[float, Tuple[int, ...], Tensor]] = []
+    seen: Set[Tuple[int, ...]] = set()
+    for score, mask in scored_masks:
+        sig = _edge_mask_signature(mask)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        pool.append((float(score), sig, mask))
+
+    chosen: List[Tensor] = []
+    chosen_sigs: List[Tuple[int, ...]] = []
+    while pool and len(chosen) < max_keep:
+        best_idx = 0
+        best_score = None
+        for idx, (base_score, sig, _) in enumerate(pool):
+            if not chosen_sigs:
+                score = base_score
+            else:
+                min_dist = min(_diversity_distance(sig, prev) for prev in chosen_sigs)
+                score = base_score + diversity_bonus * min_dist
+            if best_score is None or score > best_score:
+                best_idx = idx
+                best_score = score
+        _, sig, mask = pool.pop(best_idx)
+        chosen.append(mask)
+        chosen_sigs.append(sig)
+    return chosen
+
+
+def _edge_index_lookup(H: Data) -> Dict[Tuple[int, int], List[int]]:
+    edge_lookup: Dict[Tuple[int, int], List[int]] = {}
+    for idx in range(H.edge_index.size(1)):
+        u = int(H.edge_index[0, idx])
+        v = int(H.edge_index[1, idx])
+        key = (u, v) if u <= v else (v, u)
+        edge_lookup.setdefault(key, []).append(int(idx))
+    return edge_lookup
+
+
+def _nodes_from_mask(H: Data, edge_mask: Tensor, root: Optional[int]) -> Set[int]:
+    if edge_mask.numel() == 0 or edge_mask.sum().item() == 0:
+        return {int(root)} if root is not None else set()
+    kept = H.edge_index[:, edge_mask]
+    return {int(v) for v in kept.flatten().tolist()}
+
+
+def _consequent_seed_masks(
+    H: Data,
+    Sigma: Sequence,
+    max_seed_per_constraint: int,
+) -> List[Tensor]:
+    if find_pattern_matches is None or not Sigma:
+        return []
+
+    edge_lookup = _edge_index_lookup(H)
+    seeds: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+
+    for tgd in Sigma:
+        try:
+            matches = find_pattern_matches(H, tgd.get("consequent", {}))
+        except Exception:
+            matches = []
+        if not matches:
+            continue
+
+        consequent_edges = list(tgd.get("consequent", {}).get("edges", [])) if isinstance(tgd, dict) else []
+        added = 0
+        for binding in matches:
+            mask = torch.zeros(H.edge_index.size(1), dtype=torch.bool, device=H.edge_index.device)
+            for edge_spec in consequent_edges:
+                u_var, v_var = edge_spec[0], edge_spec[1]
+                if u_var not in binding or v_var not in binding:
+                    continue
+                u = int(binding[u_var])
+                v = int(binding[v_var])
+                key = (u, v) if u <= v else (v, u)
+                for idx in edge_lookup.get(key, []):
+                    mask[idx] = True
+            if mask.sum().item() == 0:
+                continue
+            sig = _edge_mask_signature(mask)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            seeds.append(mask)
+            added += 1
+            if added >= max_seed_per_constraint:
+                break
+    return seeds
+
+
+def _consequent_seed_infos(
+    H: Data,
+    Sigma: Sequence,
+    max_seed_per_constraint: int,
+    pool_factor: int,
+    local_budget: int,
+    root: Optional[int],
+    L: int,
+    diversity_bonus: float,
+) -> List[SeedInfo]:
+    if find_pattern_matches is None or not Sigma:
+        return []
+
+    hops = _node_hops(H, root)
+    edge_lookup = _edge_index_lookup(H)
+    infos: List[SeedInfo] = []
+    scan_limit = max(1, int(max_seed_per_constraint)) * max(1, int(pool_factor))
+
+    for tgd in Sigma:
+        try:
+            matches = find_pattern_matches(H, tgd.get("consequent", {}))
+        except Exception:
+            matches = []
+        if not matches:
+            continue
+
+        consequent_edges = list(tgd.get("consequent", {}).get("edges", [])) if isinstance(tgd, dict) else []
+        per_constraint: List[Tuple[float, SeedInfo]] = []
+        seen_local: Set[Tuple[int, ...]] = set()
+        for binding in matches:
+            if len(per_constraint) >= scan_limit:
+                break
+            mask = torch.zeros(H.edge_index.size(1), dtype=torch.bool, device=H.edge_index.device)
+            for edge_spec in consequent_edges:
+                u_var, v_var = edge_spec[0], edge_spec[1]
+                if u_var not in binding or v_var not in binding:
+                    continue
+                u = int(binding[u_var])
+                v = int(binding[v_var])
+                key = (u, v) if u <= v else (v, u)
+                for idx in edge_lookup.get(key, []):
+                    mask[idx] = True
+            if mask.sum().item() == 0:
+                continue
+            sig = _edge_mask_signature(mask)
+            if sig in seen_local:
+                continue
+            seen_local.add(sig)
+            witness_nodes = _nodes_from_mask(H, mask, root)
+            witness_edges = _mask_edge_set(H, mask)
+            est_cost = local_budget + 1
+            if backchase_repair_cost is not None:
+                try:
+                    ok, rep_cost, _ = backchase_repair_cost(
+                        H,
+                        tgd.get("antecedent", {}),
+                        binding,
+                        local_budget,
+                        witness_nodes=witness_nodes,
+                        witness_edges=witness_edges,
+                        return_details=False,
+                    )
+                    est_cost = int(rep_cost if ok else max(local_budget + 1, rep_cost))
+                except Exception:
+                    est_cost = local_budget + 1
+            target_rel = _mask_target_relevance(H, mask, root, hops, L)
+            size_ratio = float(mask.sum().item()) / max(1, int(H.edge_index.size(1)))
+            feasible_bonus = 1.0 if est_cost <= local_budget else 0.0
+            priority = (
+                2.0 * feasible_bonus
+                + 1.5 * (1.0 / (1.0 + float(est_cost)))
+                + 0.8 * target_rel
+                - 1.1 * size_ratio
+            )
+            per_constraint.append((
+                priority,
+                SeedInfo(
+                    constraint_name=_constraint_name(tgd),
+                    mask=mask.clone(),
+                    estimated_grounding_cost=int(est_cost),
+                    consequent_match_count=1,
+                    target_relevance=float(target_rel),
+                    priority=float(priority),
+                ),
+            ))
+
+        if per_constraint:
+            chosen_masks = _select_diverse_ranked_masks(
+                [(score, info.mask) for score, info in per_constraint],
+                max_keep=max(1, int(max_seed_per_constraint)),
+                diversity_bonus=diversity_bonus,
+            )
+            chosen_sigs = {_edge_mask_signature(mask) for mask in chosen_masks}
+            for _, info in sorted(per_constraint, key=lambda item: item[0], reverse=True):
+                if _edge_mask_signature(info.mask) in chosen_sigs:
+                    infos.append(info)
+                    chosen_sigs.remove(_edge_mask_signature(info.mask))
+                    if not chosen_sigs:
+                        break
+    return infos
+
+
+def _legacy_prefix_masks(
+    H: Data,
+    root: Optional[int],
+    shells: Sequence[Tensor],
+    max_checkpoints: int,
+) -> List[Tensor]:
+    if max_checkpoints <= 0:
+        return []
+    edge_mask = torch.zeros(H.edge_index.size(1), dtype=torch.bool, device=H.edge_index.device)
+    current_nodes = torch.tensor([int(root)], dtype=torch.long, device=H.edge_index.device) if root is not None else torch.tensor([], dtype=torch.long, device=H.edge_index.device)
+    stream: List[Tensor] = []
+    for shell in shells:
+        indices = shell if shell.dtype != torch.bool else torch.nonzero(shell, as_tuple=False).flatten()
+        for e_idx in indices:
+            u, w = H.edge_index[:, e_idx]
+            in_u = (current_nodes == int(u)).any()
+            in_w = (current_nodes == int(w)).any()
+            if (root is None) or (current_nodes.numel() > 0 and (in_u or in_w)):
+                edge_mask[e_idx] = True
+                stream.append(edge_mask.clone())
+                current_nodes = torch.unique(torch.cat([current_nodes, torch.tensor([int(u), int(w)], device=current_nodes.device)]))
+    if len(stream) <= max_checkpoints:
+        return stream
+    selected: List[Tensor] = []
+    for i in range(max_checkpoints):
+        pos = int(round(i * (len(stream) - 1) / max(1, max_checkpoints - 1)))
+        selected.append(stream[pos])
+    return selected
+
+
+def _bounded_expand_masks(
+    H: Data,
+    seeds: Sequence[Tensor],
+    root: Optional[int],
+    expand_steps: int,
+    branch_factor: int,
+    beam_width: int,
+    max_masks: int,
+    candidate_score_fn: Optional[Callable[[Tensor], float]] = None,
+    diversity_bonus: float = 0.0,
+) -> List[Tensor]:
+    if not seeds:
+        return []
+
+    edge_lookup = _edge_index_lookup(H)
+    del edge_lookup  # lookup built for symmetry with seed generation; not needed below
+    all_masks: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+    beam: List[Tensor] = []
+
+    for mask in seeds:
+        sig = _edge_mask_signature(mask)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        beam.append(mask.clone())
+        all_masks.append(mask.clone())
+        if len(all_masks) >= max_masks:
+            return all_masks
+
+    for _ in range(max(0, expand_steps)):
+        next_candidates: List[Tuple[float, Tensor]] = []
+        for mask in beam:
+            current_nodes = _nodes_from_mask(H, mask, root)
+            frontier: List[Tuple[Tuple[int, int, int], int]] = []
+            for e_idx in range(H.edge_index.size(1)):
+                if bool(mask[e_idx]):
+                    continue
+                u = int(H.edge_index[0, e_idx])
+                v = int(H.edge_index[1, e_idx])
+                if root is not None and current_nodes and (u not in current_nodes and v not in current_nodes):
+                    continue
+                touches = int(u in current_nodes) + int(v in current_nodes)
+                introduces = int(u not in current_nodes) + int(v not in current_nodes)
+                score = (touches, introduces, -e_idx)
+                frontier.append((score, e_idx))
+            frontier.sort(reverse=True)
+            shortlist = frontier[:max(branch_factor, beam_width) * (2 if candidate_score_fn is not None else 1)]
+            for heuristic_key, e_idx in shortlist:
+                child = mask.clone()
+                child[e_idx] = True
+                sig = _edge_mask_signature(child)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                child_score = (
+                    float(candidate_score_fn(child))
+                    if candidate_score_fn is not None
+                    else float((heuristic_key[0] * 10) + heuristic_key[1] - int(child.sum().item()) * 0.01)
+                )
+                next_candidates.append((child_score, child))
+                all_masks.append(child.clone())
+                if len(all_masks) >= max_masks:
+                    return all_masks
+        if candidate_score_fn is not None:
+            beam = _select_diverse_ranked_masks(next_candidates, max_keep=beam_width, diversity_bonus=diversity_bonus)
+        else:
+            next_candidates.sort(key=lambda item: item[0], reverse=True)
+            beam = [mask for _, mask in next_candidates[:beam_width]]
+        if not beam:
+            break
+    return all_masks
+
+
+def _bounded_prune_full_masks(
+    H: Data,
+    seed_masks: Sequence[Tensor],
+    max_edge_choices: int = 8,
+    max_remove_budget: int = 2,
+    max_masks: int = 12,
+) -> List[Tensor]:
+    M = H.edge_index.size(1)
+    if M == 0 or max_masks <= 0:
+        return []
+
+    edge_scores = [0] * M
+    for mask in seed_masks:
+        active = torch.nonzero(mask, as_tuple=False).flatten().detach().cpu().tolist()
+        for idx in active:
+            edge_scores[int(idx)] += 1
+
+    ranked = list(range(M))
+    ranked.sort(key=lambda idx: (edge_scores[idx], idx))
+    candidates = ranked[:max(1, min(max_edge_choices, M))]
+
+    full_mask = torch.ones(M, dtype=torch.bool, device=H.edge_index.device)
+    masks: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+
+    def _append(mask: Tensor) -> None:
+        sig = _edge_mask_signature(mask)
+        if sig in seen:
+            return
+        seen.add(sig)
+        masks.append(mask)
+
+    for idx in candidates:
+        child = full_mask.clone()
+        child[idx] = False
+        _append(child)
+        if len(masks) >= max_masks:
+            return masks
+
+    if max_remove_budget >= 2:
+        pair_limit = min(len(candidates), 6)
+        for i in range(pair_limit):
+            for j in range(i + 1, pair_limit):
+                child = full_mask.clone()
+                child[candidates[i]] = False
+                child[candidates[j]] = False
+                _append(child)
+                if len(masks) >= max_masks:
+                    return masks
+    return masks
+
+
+def _edge_support_from_seed_infos(seed_infos: Sequence[SeedInfo], num_edges: int) -> List[float]:
+    support = [0.0] * int(num_edges)
+    for info in seed_infos:
+        weight = 1.0 / (1.0 + float(max(0, info.estimated_grounding_cost)))
+        for idx in torch.nonzero(info.mask, as_tuple=False).flatten().tolist():
+            support[int(idx)] += weight
+    return support
+
+
+def _hybrid_prune_full_masks(
+    H: Data,
+    seed_infos: Sequence[SeedInfo],
+    candidate_score_fn: Callable[[Tensor], float],
+    max_masks: int,
+    delete_budget: int,
+    branch_factor: int,
+    beam_width: int,
+    root: Optional[int],
+    diversity_bonus: float,
+) -> List[Tensor]:
+    M = int(H.edge_index.size(1))
+    if M == 0 or max_masks <= 0 or delete_budget <= 0:
+        return []
+
+    graph_mode = root is None
+    edge_support = _edge_support_from_seed_infos(seed_infos, M)
+    hops = _node_hops(H, root)
+    full_mask = torch.ones(M, dtype=torch.bool, device=H.edge_index.device)
+    results: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+    beam: List[Tensor] = [full_mask]
+
+    def _delete_priority(mask: Tensor, e_idx: int) -> float:
+        u = int(H.edge_index[0, e_idx])
+        v = int(H.edge_index[1, e_idx])
+        support_penalty = edge_support[e_idx]
+        endpoint_hop = 0.0
+        if hops is not None:
+            h_u = hops[u] if 0 <= u < len(hops) and hops[u] >= 0 else max(1, len(hops))
+            h_v = hops[v] if 0 <= v < len(hops) and hops[v] >= 0 else max(1, len(hops))
+            endpoint_hop = float(h_u + h_v) / 2.0
+        # Higher means "better edge to delete".
+        if graph_mode:
+            return (1.5 * (1.0 / (1.0 + support_penalty))) + 0.05 * endpoint_hop
+        return (1.0 * (1.0 / (1.0 + support_penalty))) + 0.20 * endpoint_hop
+
+    for step in range(max(1, int(delete_budget))):
+        next_pool: List[Tuple[float, Tensor]] = []
+        for mask in beam:
+            active_indices = torch.nonzero(mask, as_tuple=False).flatten().tolist()
+            ranked_edges = sorted(active_indices, key=lambda idx: (_delete_priority(mask, int(idx)), -int(idx)), reverse=True)
+            for e_idx in ranked_edges[:max(1, int(branch_factor))]:
+                child = mask.clone()
+                child[int(e_idx)] = False
+                sig = _edge_mask_signature(child)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                delete_gain = (M - int(child.sum().item())) / float(max(1, M))
+                score = float(candidate_score_fn(child))
+                # Encourage concise near-full candidates without collapsing into tiny graphs.
+                score += (1.2 if graph_mode else 0.35) * delete_gain
+                next_pool.append((score, child))
+                results.append(child.clone())
+                if len(results) >= max_masks:
+                    return results
+        if not next_pool:
+            break
+        beam = _select_diverse_ranked_masks(next_pool, max_keep=max(1, int(beam_width)), diversity_bonus=diversity_bonus)
+    return results
+
+
+def _generate_candidate_edge_masks(
+    H: Data,
+    root: Optional[int],
+    shells: Sequence[Tensor],
+    Sigma: Sequence,
+    seed_per_constraint: int = 2,
+    expand_steps: int = 2,
+    branch_factor: int = 3,
+    beam_width: int = 6,
+    max_candidates: int = 48,
+    legacy_checkpoints: int = 6,
+    local_budget: int = 2,
+    use_ranked_candidate_prioritization: bool = False,
+    use_task_aware_hybrid_generation: bool = False,
+    ranking_pool_factor: int = 3,
+    diversity_bonus: float = 0.20,
+    max_near_full_candidates: int = 16,
+    near_full_delete_budget: int = 3,
+    near_full_branch_factor: int = 6,
+    near_full_beam_width: int = 4,
+) -> List[Tensor]:
+    if not use_ranked_candidate_prioritization:
+        max_candidates = max(1, int(max_candidates))
+        candidate_masks: List[Tensor] = []
+        seen: Set[Tuple[int, ...]] = set()
+
+        def _append(mask_iter: Iterable[Tensor]) -> None:
+            nonlocal candidate_masks
+            for mask in mask_iter:
+                sig = _edge_mask_signature(mask)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                candidate_masks.append(mask.clone())
+                if len(candidate_masks) >= max_candidates:
+                    return
+
+        seed_masks = _consequent_seed_masks(H, Sigma, max_seed_per_constraint=max(1, int(seed_per_constraint)))
+        _append(seed_masks)
+        if len(candidate_masks) < max_candidates:
+            expanded = _bounded_expand_masks(
+                H,
+                seed_masks,
+                root=root,
+                expand_steps=max(0, int(expand_steps)),
+                branch_factor=max(1, int(branch_factor)),
+                beam_width=max(1, int(beam_width)),
+                max_masks=max_candidates - len(candidate_masks),
+            )
+            _append(expanded)
+        if len(candidate_masks) < max_candidates:
+            _append(
+                _bounded_prune_full_masks(
+                    H,
+                    seed_masks,
+                    max_edge_choices=min(8, H.edge_index.size(1)),
+                    max_remove_budget=2,
+                    max_masks=max_candidates - len(candidate_masks),
+                )
+            )
+        if len(candidate_masks) < max_candidates:
+            _append(_legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints))))
+
+        if not candidate_masks:
+            candidate_masks = _legacy_prefix_masks(H, root, shells, max_checkpoints=1)
+        return candidate_masks[:max_candidates]
+
+    max_candidates = max(1, int(max_candidates))
+    pool_limit = max_candidates * max(2, int(ranking_pool_factor))
+    candidate_masks: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+    hop_cache = _node_hops(H, root)
+    seed_infos = _consequent_seed_infos(
+        H,
+        Sigma,
+        max_seed_per_constraint=max(1, int(seed_per_constraint)),
+        pool_factor=max(2, int(ranking_pool_factor)),
+        local_budget=max(1, int(local_budget)),
+        root=root,
+        L=max(1, len(shells)),
+        diversity_bonus=float(diversity_bonus),
+    )
+    score_cache: Dict[Tuple[int, ...], float] = {}
+
+    def _candidate_priority(mask: Tensor) -> float:
+        sig = _edge_mask_signature(mask)
+        cached = score_cache.get(sig)
+        if cached is not None:
+            return cached
+        size_ratio = float(mask.sum().item()) / max(1, int(H.edge_index.size(1)))
+        node_ratio = float(len(_nodes_from_mask(H, mask, root))) / max(1, int(H.num_nodes))
+        target_rel = _mask_target_relevance(H, mask, root, hop_cache, max(1, len(shells)))
+        supported_infos = [info for info in seed_infos if _mask_contains(mask, info.mask)]
+        constraint_to_cost: Dict[str, int] = {}
+        for info in supported_infos:
+            prev = constraint_to_cost.get(info.constraint_name)
+            if prev is None or info.estimated_grounding_cost < prev:
+                constraint_to_cost[info.constraint_name] = int(info.estimated_grounding_cost)
+        distinct_constraint_potential = len(constraint_to_cost)
+        consequent_match_count = len(supported_infos)
+        grounding_potential = 0.0
+        if constraint_to_cost:
+            grounding_potential = sum(1.0 / (1.0 + float(cost)) for cost in constraint_to_cost.values()) / len(constraint_to_cost)
+        priority = (
+            2.2 * distinct_constraint_potential
+            + 0.35 * consequent_match_count
+            + 1.1 * grounding_potential
+            + 0.8 * target_rel
+            - 1.7 * size_ratio
+            - 0.5 * node_ratio
+        )
+        score_cache[sig] = float(priority)
+        return float(priority)
+
+    def _append(mask_iter: Iterable[Tensor], limit: int) -> None:
+        nonlocal candidate_masks
+        for mask in mask_iter:
+            sig = _edge_mask_signature(mask)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            candidate_masks.append(mask.clone())
+            if len(candidate_masks) >= limit:
+                return
+
+    seed_masks = [info.mask.clone() for info in seed_infos]
+    graph_mode = root is None
+
+    if not use_task_aware_hybrid_generation:
+        _append(seed_masks, pool_limit)
+        if len(candidate_masks) < pool_limit:
+            expanded = _bounded_expand_masks(
+                H,
+                seed_masks,
+                root=root,
+                expand_steps=max(0, int(expand_steps)),
+                branch_factor=max(1, int(branch_factor)),
+                beam_width=max(1, int(beam_width)),
+                max_masks=pool_limit - len(candidate_masks),
+                candidate_score_fn=_candidate_priority,
+                diversity_bonus=float(diversity_bonus),
+            )
+            _append(expanded, pool_limit)
+        if len(candidate_masks) < pool_limit:
+            _append(
+                _bounded_prune_full_masks(
+                    H,
+                    seed_masks,
+                    max_edge_choices=min(8, H.edge_index.size(1)),
+                    max_remove_budget=2,
+                    max_masks=pool_limit - len(candidate_masks),
+                ),
+                pool_limit,
+            )
+        if len(candidate_masks) < pool_limit:
+            _append(_legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints))), pool_limit)
+    else:
+        if graph_mode:
+            legacy_quota = min(max(2, int(legacy_checkpoints)), max(4, max_candidates // 8))
+            prune_quota = min(
+                int(max_near_full_candidates),
+                max(4, max_candidates // 2),
+            )
+        else:
+            legacy_quota = min(max(1, int(legacy_checkpoints)), 2)
+            prune_quota = min(int(max_near_full_candidates), 2)
+        growth_quota = max(1, max_candidates - prune_quota - legacy_quota)
+
+        growth_masks: List[Tensor] = []
+        growth_seen: Set[Tuple[int, ...]] = set()
+        for mask in seed_masks:
+            sig = _edge_mask_signature(mask)
+            if sig not in growth_seen:
+                growth_seen.add(sig)
+                growth_masks.append(mask.clone())
+        expanded = _bounded_expand_masks(
+            H,
+            seed_masks,
+            root=root,
+            expand_steps=max(0, int(expand_steps)),
+            branch_factor=max(1, int(branch_factor)),
+            beam_width=max(1, int(beam_width)),
+            max_masks=max(1, growth_quota * max(2, int(ranking_pool_factor))),
+            candidate_score_fn=_candidate_priority,
+            diversity_bonus=float(diversity_bonus),
+        )
+        for mask in expanded:
+            sig = _edge_mask_signature(mask)
+            if sig not in growth_seen:
+                growth_seen.add(sig)
+                growth_masks.append(mask.clone())
+
+        prune_masks = _hybrid_prune_full_masks(
+            H,
+            seed_infos=seed_infos,
+            candidate_score_fn=_candidate_priority,
+            max_masks=max(1, prune_quota * max(2, int(ranking_pool_factor))),
+            delete_budget=max(1, int(near_full_delete_budget)) if graph_mode else max(1, min(1, int(near_full_delete_budget))),
+            branch_factor=max(1, int(near_full_branch_factor)) if graph_mode else max(1, min(3, int(near_full_branch_factor))),
+            beam_width=max(1, int(near_full_beam_width)) if graph_mode else max(1, min(2, int(near_full_beam_width))),
+            root=root,
+            diversity_bonus=float(diversity_bonus),
+        )
+        legacy_masks = _legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints)))
+
+        branch_selected: List[Tensor] = []
+        branch_selected.extend(
+            _select_diverse_ranked_masks(
+                [(_candidate_priority(mask), mask) for mask in growth_masks],
+                max_keep=max(1, growth_quota),
+                diversity_bonus=float(diversity_bonus),
+            )
+        )
+        branch_selected.extend(
+            _select_diverse_ranked_masks(
+                [(_candidate_priority(mask), mask) for mask in prune_masks],
+                max_keep=max(1, prune_quota),
+                diversity_bonus=float(diversity_bonus),
+            )
+        )
+        branch_selected.extend(
+            _select_diverse_ranked_masks(
+                [(_candidate_priority(mask), mask) for mask in legacy_masks],
+                max_keep=max(0, legacy_quota),
+                diversity_bonus=float(diversity_bonus) * 0.5,
+            )
+        )
+        _append(branch_selected, max_candidates)
+        if len(candidate_masks) < max_candidates:
+            fallback_pool: List[Tensor] = []
+            for source in (growth_masks, prune_masks, legacy_masks):
+                for mask in source:
+                    fallback_pool.append(mask)
+            _append(
+                _select_diverse_ranked_masks(
+                    [(_candidate_priority(mask), mask) for mask in fallback_pool],
+                    max_keep=max_candidates - len(candidate_masks),
+                    diversity_bonus=float(diversity_bonus),
+                ),
+                max_candidates,
+            )
+
+    if not candidate_masks:
+        candidate_masks = _legacy_prefix_masks(H, root, shells, max_checkpoints=1)
+
+    ranked = _select_diverse_ranked_masks(
+        [(_candidate_priority(mask), mask) for mask in candidate_masks],
+        max_keep=max_candidates,
+        diversity_bonus=float(diversity_bonus),
+    )
+    return ranked[:max_candidates]
 
 # ------------------------------- Default hooks --------------------------------
 
@@ -212,16 +974,8 @@ def _default_conc(Gs: Data) -> float:
 
 
 def _default_rpr(Gs: Data) -> float:
-    """Repair penalty proxy as defined in the paper:
-    rpr(Gs) = 1 - sum_rep / (|E(Gs)| + sum_rep)
-    where sum_rep = sum of repairs from Gamma(Gs, B).
-    """
-    #目前这个函数有问题，一会儿来fix，输出持续等于1
-    sum_rep = getattr(Gs, '_rep_sum', 0.0)
-    m = Gs.edge_index.size(1) if Gs.edge_index.numel() > 0 else 0
-    if m == 0 and sum_rep == 0:
-        return 0.0
-    return 1.0 - (sum_rep / (m + sum_rep))
+    """Backward-compatible alias for alignment-style grounding quality."""
+    return float(getattr(Gs, '_alignment', 0.0))
 
 # ------------------------------ Utility methods ------------------------------
 
@@ -317,33 +1071,39 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
             data.y_type = H.y_type[nodes]  # Node classification: index by nodes
         else:
             data.y_type = H.y_type  # Graph classification: keep as-is
+    if hasattr(H, 'node_labels') and H.node_labels is not None:
+        if is_node_task:
+            data.node_labels = H.node_labels[nodes]
+        else:
+            data.node_labels = H.node_labels
+    if hasattr(H, 'edge_rel_type') and H.edge_rel_type is not None:
+        data.edge_rel_type = H.edge_rel_type[edge_mask].clone()
     
     data.root = getattr(H, 'root', None)
     data.E_base = getattr(H, 'E_base', None)
-    # FIX: recompute _target_node_subgraph_id in candidate subgraph
-    # H.root is the target node ID in H; mapping[H.root] is its new ID in candidate
-    root_val = getattr(data, 'root', None)
-    if root_val is not None and root_val >= 0:
-        # Ensure root_val is within mapping bounds
-        root_idx = int(root_val)
-        if root_idx < len(mapping) and mapping[root_idx] >= 0:
-            data._target_node_subgraph_id = int(mapping[root_idx].item())
-        else:
-            # Root not in this subgraph, use 0
-            data._target_node_subgraph_id = 0
-    elif hasattr(H, '_target_node_subgraph_id'):
-        # If H already has _target_node_subgraph_id (from L-hop extraction), remap it
-        old_id = H._target_node_subgraph_id
-        if old_id < len(mapping) and mapping[old_id] >= 0:
-            data._target_node_subgraph_id = int(mapping[old_id].item())
-        else:
-            data._target_node_subgraph_id = 0
-    else:
-        data._target_node_subgraph_id = 0
+    # Only node-level candidates should expose _target_node_subgraph_id.
+    if is_node_task:
+        root_val = getattr(data, 'root', None)
+        if root_val is not None and root_val >= 0:
+            root_idx = int(root_val)
+            if root_idx < len(mapping) and mapping[root_idx] >= 0:
+                data._target_node_subgraph_id = int(mapping[root_idx].item())
+            else:
+                data._target_node_subgraph_id = 0
+        elif hasattr(H, '_target_node_subgraph_id'):
+            old_id = H._target_node_subgraph_id
+            if old_id < len(mapping) and mapping[old_id] >= 0:
+                data._target_node_subgraph_id = int(mapping[old_id].item())
+            else:
+                data._target_node_subgraph_id = 0
     # Attach references for counterfactual verification:
     # _H_full: the full (masked) graph; _edge_idx_in_full: indices of this candidate's edges in H
     data._H_full = H
     data._edge_idx_in_full = torch.nonzero(edge_mask, as_tuple=False).flatten().clone()
+    if hasattr(H, '_nodes_in_observed') and getattr(H, '_nodes_in_observed') is not None:
+        data._nodes_in_observed = H._nodes_in_observed[nodes].clone()
+    else:
+        data._nodes_in_observed = nodes.clone()
     # Persist nodes mapping to full graph for use in repair semantics
     if hasattr(H, '_nodes_in_full') and getattr(H, '_nodes_in_full') is not None:
     # H._nodes_in_full maps H's local ids -> full-graph ids.
@@ -413,6 +1173,20 @@ class ApxChase:
         gamma_fn: Optional[Callable[[Data, Sequence, int], Set]] = None,
         conc_fn: Callable[[Data], float] = _default_conc,
         rpr_fn: Callable[[Data], float] = _default_rpr,
+        seed_per_constraint: int = 2,
+        candidate_expand_steps: int = 2,
+        candidate_branch_factor: int = 3,
+        candidate_beam_width: int = 6,
+        candidate_max_masks: int = 48,
+        legacy_prefix_checkpoints: int = 6,
+        use_ranked_candidate_prioritization: bool = True,
+        use_task_aware_hybrid_generation: bool = False,
+        ranking_pool_factor: int = 3,
+        ranking_diversity_bonus: float = 0.20,
+        max_near_full_candidates: int = 16,
+        near_full_delete_budget: int = 3,
+        near_full_branch_factor: int = 6,
+        near_full_beam_width: int = 4,
         debug: bool = False,
     ):
         self.model = model
@@ -428,7 +1202,22 @@ class ApxChase:
         self.verify_witness_fn = verify_witness_fn 
         self.conc_fn = conc_fn # conciseness
         self.rpr_fn = rpr_fn # repair penalty
+        self.seed_per_constraint = int(seed_per_constraint)
+        self.candidate_expand_steps = int(candidate_expand_steps)
+        self.candidate_branch_factor = int(candidate_branch_factor)
+        self.candidate_beam_width = int(candidate_beam_width)
+        self.candidate_max_masks = int(candidate_max_masks)
+        self.legacy_prefix_checkpoints = int(legacy_prefix_checkpoints)
+        self.use_ranked_candidate_prioritization = bool(use_ranked_candidate_prioritization)
+        self.use_task_aware_hybrid_generation = bool(use_task_aware_hybrid_generation)
+        self.ranking_pool_factor = int(ranking_pool_factor)
+        self.ranking_diversity_bonus = float(ranking_diversity_bonus)
+        self.max_near_full_candidates = int(max_near_full_candidates)
+        self.near_full_delete_budget = int(near_full_delete_budget)
+        self.near_full_branch_factor = int(near_full_branch_factor)
+        self.near_full_beam_width = int(near_full_beam_width)
         self.debug = debug
+        self._last_run_stats = {}
         # If user did not pass a custom gamma_fn, upgrade to a version
         # that also computes repair costs using backchase on a clean graph.
         if gamma_fn is None:
@@ -443,94 +1232,10 @@ class ApxChase:
     # -------------------------------- Main method --------------------------------
 
     def _gamma_with_repair(self, Gs: Data, Sigma: Sequence, B: int) -> Set[str]:
-        """
-        STRICT repair semantics (no heuristic completion):
-        1) Run HEAD matching **on the candidate** subgraph `Gs` to get bindings (var -> Gs node id).
-        2) Map each binding to **full-graph ids** via `Gs._nodes_in_full`.
-        3) On the clean/original graph `self._H_clean` (if provided; else fall back to `Gs`),
-            call `backchase_repair_cost(clean_graph, tgd, binding_full_ids, B)` to obtain the
-            minimal number of BODY edges that must be added for this binding to satisfy BODY.
-        4) If the minimal repair cost over all bindings ≤ B, the constraint is grounded.
-            Accumulate the minimal repair cost per-constraint into `Gs._rep_sum` for downstream rpr().
-        """
-        grounded_names: Set[str] = set()
-        total_rep = 0
-
-        # Required hooks
-        if find_head_matches is None or Sigma is None or backchase_repair_cost is None:
+        if find_pattern_matches is None or Sigma is None or backchase_repair_cost is None:
             return set()
-
-        # Clean graph for repair semantics
-        G_clean: Data = getattr(self, '_H_clean', None)
-        if G_clean is None:
-            G_clean = Gs  # conservative fallback
-
-        # Candidate node-id -> full-graph node-id mapping is required
-        nodes_in_full = getattr(Gs, '_nodes_in_full', None)
-        if nodes_in_full is None:
-            return set()
-        nodes_in_full = nodes_in_full.tolist()
-
-        def _map_full(i_view: int) -> int:
-            return int(nodes_in_full[int(i_view)])
-
-        for tgd in Sigma:
-            # Name for logging/return
-            try:
-                name = tgd.get('name', 'unnamed') if isinstance(tgd, dict) else str(tgd)
-            except Exception:
-                name = str(tgd)
-
-            # 1) HEAD matches on the candidate
-            try:
-                matches = find_head_matches(Gs, tgd)
-            except Exception:
-                matches = []
-
-            best_rep = None
-            # 2–3) Evaluate strict repair cost on clean graph for each binding
-            for bind_view in matches:
-                try:
-                    bind_full = {var: _map_full(nv) for var, nv in bind_view.items()}
-                except Exception:
-                    continue
-                try:
-                    rep_cost = backchase_repair_cost(G_clean, tgd, bind_full, B)
-                except Exception:
-                    rep_cost = None
-
-                # Normalize different possible return types to a numeric cost
-                # Acceptable forms:
-                #   - int/float cost
-                #   - (cost, ...) tuple or [cost, ...] list
-                #   - { 'cost': cost, ... } dict
-                if isinstance(rep_cost, (tuple, list)):
-                    rep_cost = rep_cost[0] if len(rep_cost) > 0 else None
-                elif isinstance(rep_cost, dict):
-                    rep_cost = rep_cost.get('cost', None)
-
-                # Ensure rep_cost is numeric
-                if rep_cost is None:
-                    continue
-                if not isinstance(rep_cost, (int, float)):
-                    # Unrecognized form; skip this binding safely
-                    continue
-
-                if rep_cost <= B:
-                    if best_rep is None or rep_cost < best_rep:
-                        best_rep = int(rep_cost)
-
-            if best_rep is not None and best_rep <= B:
-                grounded_names.add(name)
-                total_rep += best_rep
-
-        # Persist accumulated repair cost for rpr(Gs)
-        try:
-            setattr(Gs, '_rep_sum', float(total_rep))
-        except Exception:
-            pass
-
-        return grounded_names
+        G_observed: Data = getattr(self, '_H_observed', None) or Gs
+        return evaluate_grounding(Gs, Sigma, B, G_observed, find_pattern_matches, backchase_repair_cost)
 
     # ---------------------------- Public entry points ----------------------------
     def explain_node(self, data: Data, v_t: int) -> Tuple[Set, List[Data]]:
@@ -545,7 +1250,7 @@ class ApxChase:
         H.root = int(v_t)
         if not hasattr(H, 'num_nodes'):
             H.num_nodes = H.x.size(0) if H.x is not None else 0
-        self._H_clean = getattr(data, '_clean', data)
+        self._H_observed = data
         # DEBUG: Check H.y distribution
         if hasattr(H, 'y') and H.y is not None:
             y_counts = {}
@@ -556,13 +1261,13 @@ class ApxChase:
             print(f"[explain_node DEBUG] H has no y attribute!")
         self._log(f"Start explain_node: v_t={v_t}, |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
-            self._log("Debugging mode — head-only diagnostics may be skipped.")
-            # Print actual constraint names and their HEAD edge counts
+            self._log("Debugging mode — consequent-only diagnostics may be skipped.")
+            # Print actual constraint names and their consequent edge counts
             constraint_info = []
             for c in self.Sigma:
                 name = c.get('name', 'unnamed')
-                head_edges = len(c.get('head', {}).get('edges', []))
-                constraint_info.append(f"{name}({head_edges}e)")
+                consequent_edges = len(c.get("consequent", {}).get("edges", []))
+                constraint_info.append(f"{name}({consequent_edges}e)")
             self._log(f"Loaded constraints: {constraint_info}")
         return self._run(H, root=v_t)
 
@@ -576,23 +1281,27 @@ class ApxChase:
         H.root = None
         if getattr(H, 'num_nodes', None) is None and getattr(H, 'x', None) is not None:
             H.num_nodes = H.x.size(0)
+        # Grounding metadata is defined over full-graph node ids. Graph-level
+        # tasks therefore need an explicit identity mapping; otherwise the
+        # fallback full-graph witness gets treated as ungroundable.
+        H._nodes_in_full = torch.arange(int(H.num_nodes), device=H.edge_index.device)
+        H._nodes_in_observed = torch.arange(int(H.num_nodes), device=H.edge_index.device)
         H.E_base = H.edge_index.size(1)
-        # Keep a handle to a clean/original graph for repair-cost evaluation.
-        # If the caller attached an attribute `_clean` (unmasked), use it;
-        # otherwise fall back to the current masked graph.
-        self._H_clean = getattr(data, '_clean', data)
+        # Grounding semantics are defined against the observed input graph.
+        self._H_observed = data
         self._log(f"Start explain_graph: |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
-            self._log("Matcher not fully available — head-only diagnostics may be skipped.")
+            self._log("Matcher not fully available — consequent-only diagnostics may be skipped.")
         return self._run(H, root=None)
 
     # ------------------------------ Internal logic ------------------------------
     def _prepare_subgraph(self, data: Data, v_t: int) -> Data:
         """Extract L-hop subgraph around v_t (node task)."""
-        node_idx, ei, mapping, _ = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
+        node_idx, ei, mapping, edge_mask = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
         x = data.x[node_idx] if getattr(data, 'x', None) is not None else None
         out = Data(x=x, edge_index=ei)
         out._nodes_in_full = node_idx.clone()
+        out._nodes_in_observed = torch.arange(int(node_idx.numel()), device=ei.device)
         out.num_nodes = int(node_idx.numel())
         # Store the target node's ID in the subgraph (after relabeling)
         out._target_node_subgraph_id = int(mapping.item())
@@ -605,6 +1314,10 @@ class ApxChase:
         # carry y_type (KMeans cluster labels) for TGD matching
         if hasattr(data, 'y_type'):
             out.y_type = data.y_type[node_idx]  # Extract type labels for subgraph nodes
+        if hasattr(data, 'node_labels'):
+            out.node_labels = data.node_labels[node_idx]
+        if hasattr(data, 'edge_rel_type'):
+            out.edge_rel_type = data.edge_rel_type[edge_mask]
         if hasattr(data, 'batch'):
             out.batch = torch.zeros(out.num_nodes, dtype=torch.long, device=ei.device)
         out.E_base = out.edge_index.size(1)
@@ -613,10 +1326,7 @@ class ApxChase:
         return out
 
     def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set) -> Set:
-        """Update streaming window per paper's UpdateWindow.
-        Returns the updated coverage set Γ(W_k).
-        """
-        # Use the candidate itself for head matching / Γ evaluation
+        """Set-level UpdateWindow approximation for F(W)."""
         H_view = Gs
         if self.debug:
             self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
@@ -629,10 +1339,10 @@ class ApxChase:
                 self._log(f"Candidate labels: {label_counts} (first 20: {labels_in_view})")
             else:
                 self._log(f"WARNING: Candidate has no y attribute!")
-        # Detailed debug: per-constraint head-only match counts on this candidate view
+        # Detailed debug: per-constraint consequent-match counts on this candidate view
         if self.debug:
-            if find_head_matches is None:
-                self._log("HEAD-scan skipped: matcher.find_head_matches is None (import failed).")
+            if find_pattern_matches is None:
+                self._log("Consequent scan skipped: matcher.find_pattern_matches is None (import failed).")
             else:
                 per_counts = []
                 total_hits = 0
@@ -642,7 +1352,7 @@ class ApxChase:
                     except Exception:
                         name = str(t)
                     try:
-                        cnt = len(find_head_matches(H_view, t))
+                        cnt = len(find_pattern_matches(H_view, t.get("consequent", {})))
                     except Exception:
                         cnt = -1  # signal error in matcher
                     if cnt >= 0:
@@ -650,39 +1360,57 @@ class ApxChase:
                     per_counts.append((name, cnt))
                 nonzero = [(n, c) for (n, c) in per_counts if c > 0]
                 top5 = sorted(nonzero, key=lambda x: -x[1])[:5]
-                self._log(f"HEAD matches on candidate: total={total_hits}; top={top5}")
-        # Compute Gamma on candidate itself
+                self._log(f"Consequent matches on candidate: total={total_hits}; top={top5}")
+        pair_score = pair_quality(Gs, self.conc_fn, self.alpha, self.beta)
         Gamma_G = self.gamma_fn(H_view, self.Sigma, self.B)
         new_cov = Gamma_G - covered
         if self.debug:
             names_all = _constraint_names(Gamma_G)
             names_new = _constraint_names(new_cov)
             self._log(f"Gamma(G)={len(Gamma_G)} (new={len(new_cov)}); names(new)={names_new[:6]}{'...' if len(names_new)>6 else ''}")
-        if len(Gamma_G) == 0:
-            self._log("Skip: no grounded constraints on this candidate.")
-            return covered
-        if len(new_cov) == 0:
-            self._log("Skip: grounded constraints bring no *new* coverage vs window.")
-            return covered
-        # compute marginal score (conc/rpr on Gs)
-        conc = self.conc_fn(Gs)
-        rpr = self.rpr_fn(Gs)
-        delta = self.alpha * conc + self.beta * rpr + self.gamma * (len(new_cov) / max(1, len(self.Sigma)))
         if self.debug:
-            self._log(f"Scores: conc={conc:.4f}, rpr={rpr:.4f}, delta={delta:.4f}")
-        entry = WindowEntry(delta, Gs)
-        if len(W_k) < self.k:
-            heapq.heappush(W_k, entry.as_tuple())
-            self._log(f"Heap push (|W_k| -> {len(W_k)}).")
-            covered = covered | new_cov
-        else:
-            if delta > W_k[0][0]:
-                self._log(f"Heap replace: popped min delta={W_k[0][0]:.4f}, pushed delta={delta:.4f}.")
-                heapq.heapreplace(W_k, entry.as_tuple())
-                covered = covered | new_cov
-            else:
-                self._log(f"Skip: delta={delta:.4f} <= heap-min={W_k[0][0]:.4f}.")
-        return covered
+            self._log(f"Scores: conc={self.conc_fn(Gs):.4f}, aln={getattr(Gs, '_alignment', 0.0):.4f}, q={pair_score:.4f}")
+
+        current_graphs = [entry[2] for entry in W_k]
+        total_constraints = len(self.Sigma)
+        current_obj = window_objective(current_graphs, total_constraints, self.gamma)
+
+        # Witness semantics: any verified candidate is already a valid witness.
+        # When the window is not full yet, admit the verified witness first and
+        # only then let later candidates compete on the set objective.
+        if len(current_graphs) < self.k:
+            if self.debug:
+                if len(Gamma_G) == 0:
+                    self._log("Admit verified witness: window not full, grounded coverage remains unchanged.")
+                else:
+                    self._log("Admit verified witness: window not full.")
+            trial_graphs = current_graphs + [Gs]
+            W_k.clear()
+            for graph in trial_graphs:
+                heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+            return window_coverage(trial_graphs)
+
+        if len(Gamma_G) == 0:
+            self._log("Skip replacement: no grounded constraints on this candidate.")
+            return covered
+
+        best_graphs = current_graphs
+        best_obj = current_obj
+        for idx in range(len(current_graphs)):
+            trial_graphs = current_graphs[:idx] + [Gs] + current_graphs[idx + 1:]
+            trial_obj = window_objective(trial_graphs, total_constraints, self.gamma)
+            if trial_obj > best_obj:
+                best_graphs = trial_graphs
+                best_obj = trial_obj
+
+        if best_graphs is current_graphs:
+            self._log("Skip: candidate does not improve set-level objective.")
+            return covered
+
+        W_k.clear()
+        for graph in best_graphs:
+            heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+        return window_coverage(best_graphs)
 
     def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
         # shells of edge indices
@@ -690,76 +1418,76 @@ class ApxChase:
         self._log(f"Edge shells: {len(shells)} levels; total edges M={H.edge_index.size(1)}")
         # Store full masked/induced graph for reuse in _update_window
         self._H_full = H
-        # state edge mask (on H.edge_index)
-        M = H.edge_index.size(1)
-        edge_mask = torch.zeros(M, dtype=torch.bool, device=H.edge_index.device)
-        current_nodes = torch.tensor([int(root)], dtype=torch.long, device=H.edge_index.device) if root is not None else torch.tensor([], dtype=torch.long, device=H.edge_index.device)
+        candidate_masks = _generate_candidate_edge_masks(
+            H,
+            root=root,
+            shells=shells,
+            Sigma=self.Sigma,
+            seed_per_constraint=self.seed_per_constraint,
+            expand_steps=self.candidate_expand_steps,
+            branch_factor=self.candidate_branch_factor,
+            beam_width=self.candidate_beam_width,
+            max_candidates=self.candidate_max_masks,
+            legacy_checkpoints=self.legacy_prefix_checkpoints,
+            local_budget=self.B,
+            use_ranked_candidate_prioritization=self.use_ranked_candidate_prioritization,
+            use_task_aware_hybrid_generation=self.use_task_aware_hybrid_generation,
+            ranking_pool_factor=self.ranking_pool_factor,
+            diversity_bonus=self.ranking_diversity_bonus,
+            max_near_full_candidates=self.max_near_full_candidates,
+            near_full_delete_budget=self.near_full_delete_budget,
+            near_full_branch_factor=self.near_full_branch_factor,
+            near_full_beam_width=self.near_full_beam_width,
+        )
         W_k: List[Tuple[float, Data]] = []
         covered: Set = set()
 
         n_candidates = 0
         n_verified = 0
         n_admitted = 0
+        fallback_used = False
 
-        for shell in shells:
-            # iterate edges in this shell
-            for e_idx in (shell if shell.dtype != torch.bool else torch.nonzero(shell, as_tuple=False).flatten()):
-                # enforce connectivity: only add if at least one endpoint already present
-                u, w = H.edge_index[:, e_idx]
-                in_u = (current_nodes == int(u)).any()
-                in_w = (current_nodes == int(w)).any()
-                # Allow free edge insertion for graph-level tasks (root is None),
-                # otherwise enforce connectivity w.r.t. currently grown node set.
-                if (root is None) or (current_nodes.numel() > 0 and (in_u or in_w)):
-                    # spawn new state by inserting this edge
-                    edge_mask[e_idx] = True
+        for edge_mask in candidate_masks:
+            if self.debug:
+                self._log(f"Candidate #{n_candidates+1}: |E(G_s)|={int(edge_mask.sum().item())}")
+            n_candidates += 1
+            Gs = _induce_subgraph_from_edges(H, edge_mask)
+            if self.debug and n_candidates == 1:
+                ok = _default_verify_witness(self.model, root, Gs, debug=True)
+            else:
+                ok = self.verify_witness_fn(self.model, root, Gs)
+            if self.debug:
+                self._log("  ✓ VerifyWitness=True" if ok else "  ✗ VerifyWitness=False")
+            if ok:
+                n_verified += 1
+                old_covered = covered
+                covered = self._update_window(W_k, Gs, covered)
+                if len(covered) > len(old_covered):
+                    n_admitted += 1
                     if self.debug:
-                        u_i, w_i = int(u), int(w)
-                        self._log(f"Candidate #{n_candidates+1}: add edge ({u_i},{w_i}); current |E(G_s)|={edge_mask.sum().item()}")
-                    n_candidates += 1
-                    Gs = _induce_subgraph_from_edges(H, edge_mask)
-                    # Enable debug for first candidate to inspect verification logic
-                    if self.debug and n_candidates == 1:
-                        ok = _default_verify_witness(self.model, root, Gs, debug=True)
-                    else:
-                        ok = self.verify_witness_fn(self.model, root, Gs)
-                    if self.debug:
-                        self._log("  ✓ VerifyWitness=True" if ok else "  ✗ VerifyWitness=False")
-                    if ok:
-                        n_verified += 1
-                        old_covered = covered
-                        covered = self._update_window(W_k, Gs, covered)
-                        if len(covered) > len(old_covered):
-                            n_admitted += 1
-                            if self.debug:
-                                self._log(f"  → Admitted: coverage |Γ(W_k)|={len(covered)}; heap size={len(W_k)}")
-                        
-                        # Early stopping: if all constraints are grounded, stop
-                        if len(covered) >= len(self.Sigma):
-                            if self.debug:
-                                self._log(f"Early stop: all {len(self.Sigma)} constraints grounded!")
-                            break  # Exit inner loop
-                    current_nodes = torch.unique(torch.cat([current_nodes, torch.tensor([int(u), int(w)], device=current_nodes.device)]))
-                # move on; do not revert the insertion (edge-insertion stream)
-            
-            # Check early stop condition for outer loop too
+                        self._log(f"  → Admitted: coverage |Γ(W_k)|={len(covered)}; heap size={len(W_k)}")
             if len(covered) >= len(self.Sigma):
-                break  # Exit shell loop
+                if self.debug:
+                    self._log(f"Early stop: all {len(self.Sigma)} constraints grounded!")
+                break
         if len(W_k) == 0:
-            # fallback: put H itself if nothing passed verification
-            covered = self._update_window(W_k, H, covered)
+            # Only allow the full observed graph as a fallback witness if it
+            # itself satisfies the witness definition.
+            if self.verify_witness_fn(self.model, root, H):
+                fallback_used = True
+                covered = self._update_window(W_k, H, covered)
 
         final_nodes = (W_k[0][2].num_nodes if len(W_k) > 0 else 0)
         self._log(f"Run stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ(W_k)|={len(covered)}, final_nodes={final_nodes}")
         if len(W_k) == 0 and self.debug:
-            self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking removes head-edges so backchase can trigger.")
+            self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking preserves consequent matches so backchase can trigger.")
 
         S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
         Sigma_star = covered
         # Annotate each witness with its grounded constraints (names) and repair sum
         annotated = []
         for Gs in S_k:
-            # Run Γ on the witness itself (head on Gs; cost vs clean is handled inside gamma_fn)
+            # Run Γ on the witness itself under the standard c -> P backchase semantics.
             grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
             try:
                 names = list(grounded_here)
@@ -775,4 +1503,16 @@ class ApxChase:
                 pass
             annotated.append(Gs)
         S_k = annotated
+        full_witness_edges = extract_witness_edges_in_full(H) if hasattr(H, '_nodes_in_full') else set()
+        fallback_selected = any(extract_witness_edges_in_full(Gs) == full_witness_edges for Gs in S_k)
+        self._last_run_stats = {
+            'num_candidates_generated': int(n_candidates),
+            'distinct_candidates_generated': int(len(candidate_masks)),
+            'num_candidates_verified': int(n_verified),
+            'num_candidates_admitted': int(n_admitted),
+            'num_selected_witnesses': int(len(S_k)),
+            'num_covered_constraints': int(len(Sigma_star)),
+            'fallback_used': bool(fallback_used),
+            'fallback_selected': bool(fallback_selected),
+        }
         return Sigma_star, S_k

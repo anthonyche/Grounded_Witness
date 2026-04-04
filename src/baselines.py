@@ -438,10 +438,24 @@ class PGExplainerNodeCache:
         if hasattr(self.explainer, 'to'):
             self.explainer.to(self.device)
         
-        # Train on multiple nodes from the full graph
-        num_train_nodes = min(100, self.full_data.x.size(0) // 2)
-        # Create train_indices on the same device as the data
-        train_indices = torch.randperm(self.full_data.x.size(0), device=self.device)[:num_train_nodes]
+        # Train on labeled nodes only. This matters for heterogeneous views such as
+        # DBLP where non-target node types carry y=-1 placeholders.
+        labels = getattr(self.full_data, "y", None)
+        train_mask = getattr(self.full_data, "train_mask", None)
+        if labels is not None and isinstance(labels, torch.Tensor):
+            valid_mask = labels.to(self.device) >= 0
+            if train_mask is not None:
+                valid_mask = valid_mask & train_mask.to(self.device)
+            valid_indices = torch.where(valid_mask)[0]
+        else:
+            valid_indices = torch.arange(self.full_data.x.size(0), device=self.device)
+
+        if valid_indices.numel() == 0:
+            raise ValueError("PGExplainer node cache found no labeled training nodes.")
+
+        num_train_nodes = min(100, int(valid_indices.numel()))
+        perm = torch.randperm(int(valid_indices.numel()), device=self.device)[:num_train_nodes]
+        train_indices = valid_indices[perm]
         
         print(f"[PGExplainer] Training once on {self.full_data.x.size(0)} nodes, {self.full_data.edge_index.size(1)} edges")
         print(f"[PGExplainer] Training with {num_train_nodes} sample nodes")

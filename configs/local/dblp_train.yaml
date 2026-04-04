@@ -1,0 +1,11 @@
+data_name: DBLP
+model_name: gcn2
+random_seed: 42
+hidden_dim: 32
+L: 2
+learning_rate: 0.01
+weight_decay: 0.0005
+num_epochs: 120
+dblp_projection_dim: 128
+constraint_source: mined
+constraint_type_source: dblp_native_bucket

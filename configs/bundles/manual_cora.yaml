@@ -1,0 +1,59 @@
+run_name: manual_cora
+dataset: cora
+model_name: gcn2
+methods:
+  - ApxC
+  - HeuC
+  - Exh
+  - GEX
+  - PGX
+
+factor_name: ""
+factor_values: []
+
+output_root: outputs/raw/bundles
+reuse_observed_graph_cache: true
+
+random_seed: 42
+sigma_size: 20
+local_budget_k: 2
+L: 2
+gamma: 1.0
+alpha: 0.5
+beta: 0.5
+incompleteness: 0.05
+target_ratio: 0.01
+
+target_nodes:
+  - 61
+  - 1879
+  - 570
+  - 2039
+  - 2668
+  - 2382
+  - 1283
+  - 736
+  - 1681
+  - 2082
+  - 9
+  - 1311
+  - 814
+  - 2281
+  - 1097
+  - 242
+  - 1133
+  - 1394
+  - 2013
+  - 794
+  - 2430
+  - 1331
+  - 6
+  - 1581
+  - 185
+  - 1815
+
+constraint_source: mined
+constraint_rule_mode: standard_backchase
+constraint_filter_target_matchability: true
+preserve_connectivity: true
+max_masks: 1

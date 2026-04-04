@@ -33,10 +33,14 @@ def _cos_sim(a: Tensor, b: Tensor) -> float:
 # `src.apxchase` or plain `apxchase`.
 try:
     from constraints import get_constraints  # optional
-    from matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+    from matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
+    from apxchase import _default_verify_witness as _shared_default_verify_witness
 except ImportError:
     from .constraints import get_constraints  # optional
-    from .matcher import Gamma, backchase_repair_cost, find_head_matches, MatchResult
+    from .matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from .grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
+    from .apxchase import _default_verify_witness as _shared_default_verify_witness
 
 
 def _constraint_names(constraints) -> List[str]:
@@ -67,111 +71,7 @@ class WindowEntry:
 # ------------------------------- Default hooks --------------------------------
 
 def _default_verify_witness(model, v_t: Optional[int], Gs: Data) -> bool:
-    """
-    Default verifier supporting both factual and counterfactual checks.
-    - Gs is the candidate subgraph.
-    - Factual: prediction on Gs matches full-graph reference in Gs.y_ref.
-    - Counterfactual: if Gs._H_full and Gs._edge_idx_in_full are present,
-      remove Gs's edges from the full graph, and check that the prediction changes.
-    Returns True if either factual OR counterfactual passes.
-    """
-    model.eval()
-    with torch.no_grad():
-        # --- Factual: prediction unchanged on Gs vs y_ref ---
-        # Determine if model expects (x, edge_index) or Data object
-        model_class_name = model.__class__.__name__
-        is_node_model = (hasattr(Gs, 'task') and Gs.task == 'node') or \
-                       any(name in model_class_name for name in ['GCN_', 'GAT_Yelp', 'SAGE_Yelp', 'GraphSAGE']) or \
-                       (not any(word in model_class_name for word in ['Classifier', 'Graph']))
-        
-        if is_node_model:
-            # Node classification: model expects (x, edge_index)
-            out = model(Gs.x, Gs.edge_index)
-        else:
-            # Graph classification: model expects Data object
-            out = model(Gs)
-        
-        factual_ok = False
-        if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
-            y_ref = getattr(Gs, 'y_ref', None)
-            if y_ref is None:
-                factual_ok = True
-            else:
-                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                # Check if multi-label (output_dim > 1 and not using softmax)
-                if out.dim() > 1 and out.size(-1) > 1:
-                    # Multi-label: use sigmoid
-                    y_hat = (torch.sigmoid(out) > 0.5).float()
-                    factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id]).all()
-                else:
-                    # Multi-class: use argmax
-                    y_hat = out.argmax(dim=-1)
-                    factual_ok = (y_ref[target_subgraph_id] == y_hat[target_subgraph_id])
-        else:
-            # Graph classification
-            y_hat = out.argmax(dim=-1)
-            y_ref = getattr(Gs, 'y_ref', None)
-            if y_ref is None:
-                factual_ok = True
-            else:
-                factual_ok = (y_ref[0] == y_hat[0])
-
-        # --- Counterfactual: prediction flips when removing Gs's edges from full graph ---
-        counterfactual_ok = False
-        # Check if Gs has references for counterfactual check
-        H_full = getattr(Gs, '_H_full', None)
-        edge_idx_in_full = getattr(Gs, '_edge_idx_in_full', None)
-        if H_full is not None and edge_idx_in_full is not None and edge_idx_in_full.numel() > 0:
-            # Construct H_minus by removing candidate's edges from the full graph
-            H_minus = H_full.clone()
-            # Drop the corresponding columns in edge_index
-            mask = torch.ones(H_full.edge_index.size(1), dtype=torch.bool, device=H_full.edge_index.device)
-            mask[edge_idx_in_full] = False
-            H_minus.edge_index = H_full.edge_index[:, mask]
-            # Copy over x, batch, y_ref, task, root, E_base as needed
-            if getattr(H_full, 'x', None) is not None:
-                H_minus.x = H_full.x
-            if hasattr(H_full, 'batch'):
-                H_minus.batch = H_full.batch
-            if hasattr(H_full, 'y_ref'):
-                H_minus.y_ref = H_full.y_ref
-            if hasattr(H_full, 'task'):
-                H_minus.task = H_full.task
-            if hasattr(H_full, 'root'):
-                H_minus.root = H_full.root
-            if hasattr(H_full, 'E_base'):
-                H_minus.E_base = H_full.E_base
-            # Run prediction on H_minus
-            # Use same logic as above to determine model type
-            if is_node_model:
-                # Node classification: model expects (x, edge_index)
-                out_minus = model(H_minus.x, H_minus.edge_index)
-            else:
-                # Graph classification: model expects Data object
-                out_minus = model(H_minus)
-            
-            if hasattr(Gs, 'task') and Gs.task == 'node' and v_t is not None:
-                target_subgraph_id = getattr(Gs, '_target_node_subgraph_id', 0)
-                # Check if multi-label
-                if out.dim() > 1 and out.size(-1) > 1:
-                    # Multi-label: use sigmoid
-                    y_hat_minus = (torch.sigmoid(out_minus) > 0.5).float()
-                    y_hat_gs = (torch.sigmoid(out) > 0.5).float()
-                    # Counterfactual: ANY label flips
-                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id]).any()
-                else:
-                    # Multi-class: use argmax
-                    y_hat_minus = out_minus.argmax(dim=-1)
-                    y_hat_gs = out.argmax(dim=-1)
-                    counterfactual_ok = (y_hat_gs[target_subgraph_id] != y_hat_minus[target_subgraph_id])
-            else:
-                # Graph classification
-                y_hat_minus = out_minus.argmax(dim=-1)
-                y_hat_gs = out.argmax(dim=-1)
-                counterfactual_ok = (y_hat_gs[0] != y_hat_minus[0])
-
-        # Accept if either factual OR counterfactual passes
-        return factual_ok or counterfactual_ok
+    return _shared_default_verify_witness(model, v_t, Gs)
 
 
 def _default_conc(Gs: Data) -> float:
@@ -187,16 +87,7 @@ def _default_conc(Gs: Data) -> float:
 
 
 def _default_rpr(Gs: Data) -> float:
-    """Repair penalty proxy as defined in the paper:
-    rpr(Gs) = 1 - sum_rep / (|E(Gs)| + sum_rep)
-    where sum_rep = sum of repairs from Gamma(Gs, B).
-    """
-    #目前这个函数有问题，一会儿来fix，输出持续等于1
-    sum_rep = getattr(Gs, '_rep_sum', 0.0)
-    m = Gs.edge_index.size(1) if Gs.edge_index.numel() > 0 else 0
-    if m == 0 and sum_rep == 0:
-        return 0.0
-    return 1.0 - (sum_rep / (m + sum_rep))
+    return float(getattr(Gs, '_alignment', 0.0))
 
 # ------------------------------ Utility methods ------------------------------
 
@@ -290,6 +181,13 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
             data.y_type = H.y_type[nodes]  # Node classification: index by nodes
         else:
             data.y_type = H.y_type  # Graph classification: keep as-is
+    if hasattr(H, 'node_labels') and H.node_labels is not None:
+        if is_node_task:
+            data.node_labels = H.node_labels[nodes]
+        else:
+            data.node_labels = H.node_labels
+    if hasattr(H, 'edge_rel_type') and H.edge_rel_type is not None:
+        data.edge_rel_type = H.edge_rel_type[edge_mask].clone()
     
     data.root = getattr(H, 'root', None)
     data.E_base = getattr(H, 'E_base', None)
@@ -317,6 +215,10 @@ def _induce_subgraph_from_edges(H: Data, edge_mask: Tensor) -> Data:
     # _H_full: the full (masked) graph; _edge_idx_in_full: indices of this candidate's edges in H
     data._H_full = H
     data._edge_idx_in_full = torch.nonzero(edge_mask, as_tuple=False).flatten().clone()
+    if hasattr(H, '_nodes_in_observed') and getattr(H, '_nodes_in_observed') is not None:
+        data._nodes_in_observed = H._nodes_in_observed[nodes].clone()
+    else:
+        data._nodes_in_observed = nodes.clone()
     # Persist nodes mapping to full graph for use in repair semantics
     if hasattr(H, '_nodes_in_full') and getattr(H, '_nodes_in_full') is not None:
     # H._nodes_in_full maps H's local ids -> full-graph ids.
@@ -456,7 +358,11 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
         for u, v, data in G.edges(data=True):
             edge_to_eid[(u, v)] = data.get('_eid', None)
 
-        # If a specific root is requested, keep the reachable component from that root.
+        # If a specific root is requested, keep the weakly connected arborescence
+        # component containing that root. For typed local motifs, keeping only
+        # outward-reachable edges from `root` is too brittle: if `root` is not
+        # the true arborescence root, the candidate collapses to a tiny branch
+        # and loses most consequent matches.
         if root is None:
             # Pick the TRUE arborescence root: node with in-degree = 0
             ar_roots = [n for n in Ar.nodes if Ar.in_degree(n) == 0]
@@ -466,23 +372,15 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
                 # Fallback: pick node with max out-degree
                 root = max(Ar.nodes, key=lambda n: Ar.out_degree(n)) if Ar.number_of_nodes() > 0 else 0
 
-        # Collect underlying undirected edge indices for edges in the arborescence component of `root`
-        if root in Ar:
-            for (u, v) in Ar.out_edges(root):
-                pass  # ensure root exists
-            # BFS over Ar starting at root:
-            from collections import deque
-            dq = deque([root])
-            seen = set([root])
-            while dq:
-                u = dq.popleft()
-                for _, v in Ar.out_edges(u):
-                    # Look up the edge ID from our mapping
-                    eid = edge_to_eid.get((u, v), None)
-                    if eid is not None:
-                        edge_mask[eid] = True
-                    if v not in seen:
-                        seen.add(v); dq.append(v)
+        # Keep HeuC strict: select only the underlying undirected edges that
+        # belong to the maximum spanning arborescence itself. Do not induce all
+        # original edges on the weak component; that collapses HeuC into a
+        # near-full-graph generator and destroys its expected speed/conciseness.
+        for u, v in Ar.edges():
+            eid = edge_to_eid.get((u, v))
+            if eid is not None:
+                edge_mask[int(eid)] = True
+
         # If still empty (e.g., root isolated), connect greedily by picking incident edges of root
         if edge_mask.sum().item() == 0 and E > 0:
             r = int(root)
@@ -509,6 +407,95 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
                     edge_mask[idx] = True
         return edge_mask
 
+
+def _generate_root_motif_candidates(
+    H: Data,
+    root: int,
+    emb: Optional[Tensor],
+    max_candidates: int = 12,
+    top_root_branches: int = 6,
+    top_extensions: int = 3,
+) -> List[Tensor]:
+    """
+    Generate a small, bounded set of root-centered heuristic candidates.
+
+    HeuC's Edmonds arborescence is useful for selecting a plausible node set,
+    but on typed local views it can still be too coarse: either a tiny branch
+    or the full component. This helper stays inside HeuC's heuristic family by
+    constructing small motif-like candidates anchored at the target root:
+      root -- nbr -- ext
+    where each undirected pair contributes all corresponding directed edges.
+    """
+    E = int(H.edge_index.size(1))
+    if root is None or E == 0:
+        return []
+
+    rel_types = getattr(H, 'edge_rel_type', None)
+
+    def edge_score(u: int, v: int) -> float:
+        return _cos_sim(emb[u], emb[v]) if emb is not None else 0.0
+
+    # Group directed edges by unordered node pair + relation type so we can
+    # recover a small typed motif while keeping both directions when available.
+    pair_groups = {}
+    for idx in range(E):
+        u = int(H.edge_index[0, idx].item())
+        v = int(H.edge_index[1, idx].item())
+        rel = int(rel_types[idx].item()) if rel_types is not None else -1
+        key = (min(u, v), max(u, v), rel)
+        pair_groups.setdefault(key, []).append(idx)
+
+    root_entries = []
+    for (u0, v0, rel), idxs in pair_groups.items():
+        if root not in (u0, v0):
+            continue
+        nbr = v0 if u0 == root else u0
+        score = edge_score(root, nbr)
+        root_entries.append((score, nbr, rel, idxs))
+    root_entries.sort(key=lambda x: x[0], reverse=True)
+
+    masks: List[Tensor] = []
+    seen = set()
+    for _, nbr, root_rel, root_group in root_entries[:max(1, top_root_branches)]:
+        ext_entries = []
+        for (u0, v0, rel), idxs in pair_groups.items():
+            if nbr not in (u0, v0):
+                continue
+            other = v0 if u0 == nbr else u0
+            if other == root:
+                continue
+            bonus = 0.1 if rel != root_rel else 0.0
+            ext_entries.append((edge_score(nbr, other) + bonus, other, rel, idxs))
+        ext_entries.sort(key=lambda x: x[0], reverse=True)
+
+        # Candidate 1: one root branch + one extension branch
+        for _, _, _, ext_group in ext_entries[:max(1, top_extensions)]:
+            mask = torch.zeros(E, dtype=torch.bool, device=H.edge_index.device)
+            mask[root_group] = True
+            mask[ext_group] = True
+            key = tuple(torch.nonzero(mask, as_tuple=False).flatten().tolist())
+            if key not in seen:
+                masks.append(mask)
+                seen.add(key)
+                if len(masks) >= max_candidates:
+                    return masks
+
+        # Candidate 2: two root branches from the same target, preserving a
+        # compact root-centered star when such variation exists.
+        for _, nbr2, _, root_group_2 in root_entries[:max(1, top_root_branches)]:
+            if nbr2 == nbr:
+                continue
+            mask = torch.zeros(E, dtype=torch.bool, device=H.edge_index.device)
+            mask[root_group] = True
+            mask[root_group_2] = True
+            key = tuple(torch.nonzero(mask, as_tuple=False).flatten().tolist())
+            if key not in seen:
+                masks.append(mask)
+                seen.add(key)
+                if len(masks) >= max_candidates:
+                    return masks
+    return masks
+
 # --------------------------------- Core class ---------------------------------
 
 class ApxChase:
@@ -526,6 +513,20 @@ class ApxChase:
         gamma_fn: Optional[Callable[[Data, Sequence, int], Set]] = None,
         conc_fn: Callable[[Data], float] = _default_conc,
         rpr_fn: Callable[[Data], float] = _default_rpr,
+        seed_per_constraint: int = 2,
+        candidate_expand_steps: int = 2,
+        candidate_branch_factor: int = 3,
+        candidate_beam_width: int = 6,
+        candidate_max_masks: int = 48,
+        legacy_prefix_checkpoints: int = 6,
+        use_ranked_candidate_prioritization: bool = True,
+        use_task_aware_hybrid_generation: bool = False,
+        ranking_pool_factor: int = 3,
+        ranking_diversity_bonus: float = 0.20,
+        max_near_full_candidates: int = 16,
+        near_full_delete_budget: int = 3,
+        near_full_branch_factor: int = 6,
+        near_full_beam_width: int = 4,
         debug: bool = False,
     ):
         self.model = model
@@ -541,7 +542,22 @@ class ApxChase:
         self.verify_witness_fn = verify_witness_fn 
         self.conc_fn = conc_fn # conciseness
         self.rpr_fn = rpr_fn # repair penalty
+        self.seed_per_constraint = int(seed_per_constraint)
+        self.candidate_expand_steps = int(candidate_expand_steps)
+        self.candidate_branch_factor = int(candidate_branch_factor)
+        self.candidate_beam_width = int(candidate_beam_width)
+        self.candidate_max_masks = int(candidate_max_masks)
+        self.legacy_prefix_checkpoints = int(legacy_prefix_checkpoints)
+        self.use_ranked_candidate_prioritization = bool(use_ranked_candidate_prioritization)
+        self.use_task_aware_hybrid_generation = bool(use_task_aware_hybrid_generation)
+        self.ranking_pool_factor = int(ranking_pool_factor)
+        self.ranking_diversity_bonus = float(ranking_diversity_bonus)
+        self.max_near_full_candidates = int(max_near_full_candidates)
+        self.near_full_delete_budget = int(near_full_delete_budget)
+        self.near_full_branch_factor = int(near_full_branch_factor)
+        self.near_full_beam_width = int(near_full_beam_width)
         self.debug = debug
+        self._last_run_stats = {}
         # If user did not pass a custom gamma_fn, upgrade to a version
         # that also computes repair costs using backchase on a clean graph.
         if gamma_fn is None:
@@ -556,94 +572,10 @@ class ApxChase:
     # -------------------------------- Main method --------------------------------
 
     def _gamma_with_repair(self, Gs: Data, Sigma: Sequence, B: int) -> Set[str]:
-        """
-        STRICT repair semantics (no heuristic completion):
-        1) Run HEAD matching **on the candidate** subgraph `Gs` to get bindings (var -> Gs node id).
-        2) Map each binding to **full-graph ids** via `Gs._nodes_in_full`.
-        3) On the clean/original graph `self._H_clean` (if provided; else fall back to `Gs`),
-            call `backchase_repair_cost(clean_graph, tgd, binding_full_ids, B)` to obtain the
-            minimal number of BODY edges that must be added for this binding to satisfy BODY.
-        4) If the minimal repair cost over all bindings ≤ B, the constraint is grounded.
-            Accumulate the minimal repair cost per-constraint into `Gs._rep_sum` for downstream rpr().
-        """
-        grounded_names: Set[str] = set()
-        total_rep = 0
-
-        # Required hooks
-        if find_head_matches is None or Sigma is None or backchase_repair_cost is None:
+        if find_pattern_matches is None or Sigma is None or backchase_repair_cost is None:
             return set()
-
-        # Clean graph for repair semantics
-        G_clean: Data = getattr(self, '_H_clean', None)
-        if G_clean is None:
-            G_clean = Gs  # conservative fallback
-
-        # Candidate node-id -> full-graph node-id mapping is required
-        nodes_in_full = getattr(Gs, '_nodes_in_full', None)
-        if nodes_in_full is None:
-            return set()
-        nodes_in_full = nodes_in_full.tolist()
-
-        def _map_full(i_view: int) -> int:
-            return int(nodes_in_full[int(i_view)])
-
-        for tgd in Sigma:
-            # Name for logging/return
-            try:
-                name = tgd.get('name', 'unnamed') if isinstance(tgd, dict) else str(tgd)
-            except Exception:
-                name = str(tgd)
-
-            # 1) HEAD matches on the candidate
-            try:
-                matches = find_head_matches(Gs, tgd)
-            except Exception:
-                matches = []
-
-            best_rep = None
-            # 2–3) Evaluate strict repair cost on clean graph for each binding
-            for bind_view in matches:
-                try:
-                    bind_full = {var: _map_full(nv) for var, nv in bind_view.items()}
-                except Exception:
-                    continue
-                try:
-                    rep_cost = backchase_repair_cost(G_clean, tgd, bind_full, B)
-                except Exception:
-                    rep_cost = None
-
-                # Normalize different possible return types to a numeric cost
-                # Acceptable forms:
-                #   - int/float cost
-                #   - (cost, ...) tuple or [cost, ...] list
-                #   - { 'cost': cost, ... } dict
-                if isinstance(rep_cost, (tuple, list)):
-                    rep_cost = rep_cost[0] if len(rep_cost) > 0 else None
-                elif isinstance(rep_cost, dict):
-                    rep_cost = rep_cost.get('cost', None)
-
-                # Ensure rep_cost is numeric
-                if rep_cost is None:
-                    continue
-                if not isinstance(rep_cost, (int, float)):
-                    # Unrecognized form; skip this binding safely
-                    continue
-
-                if rep_cost <= B:
-                    if best_rep is None or rep_cost < best_rep:
-                        best_rep = int(rep_cost)
-
-            if best_rep is not None and best_rep <= B:
-                grounded_names.add(name)
-                total_rep += best_rep
-
-        # Persist accumulated repair cost for rpr(Gs)
-        try:
-            setattr(Gs, '_rep_sum', float(total_rep))
-        except Exception:
-            pass
-
-        return grounded_names
+        G_observed: Data = getattr(self, '_H_observed', None) or Gs
+        return evaluate_grounding(Gs, Sigma, B, G_observed, find_pattern_matches, backchase_repair_cost)
 
     # ---------------------------- Public entry points ----------------------------
     def explain_node(self, data: Data, v_t: int) -> Tuple[Set, List[Data]]:
@@ -660,11 +592,12 @@ class ApxChase:
         
         H.task = 'node'
         H.root = int(v_t)
-        self._H_clean = getattr(data, '_clean', data)
+        self._H_observed = data
         self._log(f"Start explain_node: v_t={v_t}, |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
-            self._log("Matcher not fully available — head-only diagnostics may be skipped.")
-        return self._run(H, root=v_t)
+            self._log("Matcher not fully available — consequent-only diagnostics may be skipped.")
+        Sigma_star, S_k = self._run(H, root=v_t)
+        return Sigma_star, S_k
 
     def explain_graph(self, data: Data) -> Tuple[Set, List[Data]]:
         """Run ApxChase for a graph-level task (e.g., MUTAG). Root is None,
@@ -676,46 +609,53 @@ class ApxChase:
         H.root = None
         if getattr(H, 'num_nodes', None) is None and getattr(H, 'x', None) is not None:
             H.num_nodes = H.x.size(0)
+        H._nodes_in_full = torch.arange(int(H.num_nodes), device=H.edge_index.device)
+        H._nodes_in_observed = torch.arange(int(H.num_nodes), device=H.edge_index.device)
         H.E_base = H.edge_index.size(1)
-        # Keep a handle to a clean/original graph for repair-cost evaluation.
-        # If the caller attached an attribute `_clean` (unmasked), use it;
-        # otherwise fall back to the current masked graph.
-        self._H_clean = getattr(data, '_clean', data)
+        # Grounding semantics are defined against the observed input graph.
+        self._H_observed = data
         self._log(f"Start explain_graph: |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}, L={self.L}, k={self.k}, B={self.B}, |Sigma|={len(self.Sigma)}")
         if self.debug:
-            self._log("Matcher not fully available — head-only diagnostics may be skipped.")
+            self._log("Matcher not fully available — consequent-only diagnostics may be skipped.")
         return self._run(H, root=None)
 
     # ------------------------------ Internal logic ------------------------------
     def _prepare_subgraph(self, data: Data, v_t: int) -> Data:
         """Extract L-hop subgraph around v_t (node task)."""
-        node_idx, ei, mapping, _ = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
+        node_idx, ei, mapping, edge_mask = k_hop_subgraph(v_t, self.L, data.edge_index, relabel_nodes=True)
         x = data.x[node_idx] if getattr(data, 'x', None) is not None else None
         out = Data(x=x, edge_index=ei)
         out._nodes_in_full = node_idx.clone()
+        out._nodes_in_observed = torch.arange(int(node_idx.numel()), device=ei.device)
         out.num_nodes = int(node_idx.numel())
         # Store the target node's ID in the subgraph (after relabeling)
         out._target_node_subgraph_id = int(mapping.item())
         # carry y_ref if provided (for verify_witness default) - extract only subgraph nodes
         if hasattr(data, 'y_ref'):
             out.y_ref = data.y_ref[node_idx]  # Only extract labels for nodes in subgraph
+        if hasattr(data, 'y'):
+            out.y = data.y[node_idx]
+        if hasattr(data, 'y_type'):
+            out.y_type = data.y_type[node_idx]
+        if hasattr(data, 'node_labels'):
+            out.node_labels = data.node_labels[node_idx]
+        if hasattr(data, 'edge_rel_type'):
+            out.edge_rel_type = data.edge_rel_type[edge_mask]
         if hasattr(data, 'batch'):
             out.batch = torch.zeros(out.num_nodes, dtype=torch.long, device=ei.device)
         out.E_base = out.edge_index.size(1)
+        out.root = v_t
+        out.task = 'node'
         return out
 
     def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set) -> Set:
-        """Update streaming window per paper's UpdateWindow.
-        Returns the updated coverage set Γ(W_k).
-        """
-        # Use the candidate itself for head matching / Γ evaluation
         H_view = Gs
         if self.debug:
             self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
-        # Detailed debug: per-constraint head-only match counts on this candidate view
+        # Detailed debug: per-constraint consequent-match counts on this candidate view
         if self.debug:
-            if find_head_matches is None:
-                self._log("HEAD-scan skipped: matcher.find_head_matches is None (import failed).")
+            if find_pattern_matches is None:
+                self._log("Consequent scan skipped: matcher.find_pattern_matches is None (import failed).")
             else:
                 per_counts = []
                 total_hits = 0
@@ -725,7 +665,7 @@ class ApxChase:
                     except Exception:
                         name = str(t)
                     try:
-                        cnt = len(find_head_matches(H_view, t))
+                        cnt = len(find_pattern_matches(H_view, t.get("consequent", {})))
                     except Exception:
                         cnt = -1  # signal error in matcher
                     if cnt >= 0:
@@ -733,39 +673,54 @@ class ApxChase:
                     per_counts.append((name, cnt))
                 nonzero = [(n, c) for (n, c) in per_counts if c > 0]
                 top5 = sorted(nonzero, key=lambda x: -x[1])[:5]
-                self._log(f"HEAD matches on candidate: total={total_hits}; top={top5}")
-        # Compute Gamma on candidate itself
+                self._log(f"Consequent matches on candidate: total={total_hits}; top={top5}")
+        pair_score = pair_quality(Gs, self.conc_fn, self.alpha, self.beta)
         Gamma_G = self.gamma_fn(H_view, self.Sigma, self.B)
         new_cov = Gamma_G - covered
         if self.debug:
             names_all = _constraint_names(Gamma_G)
             names_new = _constraint_names(new_cov)
             self._log(f"Gamma(G)={len(Gamma_G)} (new={len(new_cov)}); names(new)={names_new[:6]}{'...' if len(names_new)>6 else ''}")
-        if len(Gamma_G) == 0:
-            self._log("Skip: no grounded constraints on this candidate.")
-            return covered
-        if len(new_cov) == 0:
-            self._log("Skip: grounded constraints bring no *new* coverage vs window.")
-            return covered
-        # compute marginal score (conc/rpr on Gs)
-        conc = self.conc_fn(Gs)
-        rpr = self.rpr_fn(Gs)
-        delta = self.alpha * conc + self.beta * rpr + self.gamma * (len(new_cov) / max(1, len(self.Sigma)))
         if self.debug:
-            self._log(f"Scores: conc={conc:.4f}, rpr={rpr:.4f}, delta={delta:.4f}")
-        entry = WindowEntry(delta, Gs)
-        if len(W_k) < self.k:
-            heapq.heappush(W_k, entry.as_tuple())
-            self._log(f"Heap push (|W_k| -> {len(W_k)}).")
-            covered = covered | new_cov
-        else:
-            if delta > W_k[0][0]:
-                self._log(f"Heap replace: popped min delta={W_k[0][0]:.4f}, pushed delta={delta:.4f}.")
-                heapq.heapreplace(W_k, entry.as_tuple())
-                covered = covered | new_cov
-            else:
-                self._log(f"Skip: delta={delta:.4f} <= heap-min={W_k[0][0]:.4f}.")
-        return covered
+            self._log(f"Scores: conc={self.conc_fn(Gs):.4f}, aln={getattr(Gs, '_alignment', 0.0):.4f}, q={pair_score:.4f}")
+
+        current_graphs = [entry[2] for entry in W_k]
+        total_constraints = len(self.Sigma)
+        current_obj = window_objective(current_graphs, total_constraints, self.gamma)
+
+        if len(current_graphs) < self.k:
+            if self.debug:
+                if len(Gamma_G) == 0:
+                    self._log("Admit verified witness: window not full, grounded coverage remains unchanged.")
+                else:
+                    self._log("Admit verified witness: window not full.")
+            trial_graphs = current_graphs + [Gs]
+            W_k.clear()
+            for graph in trial_graphs:
+                heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+            return window_coverage(trial_graphs)
+
+        if len(Gamma_G) == 0:
+            self._log("Skip replacement: no grounded constraints on this candidate.")
+            return covered
+
+        best_graphs = current_graphs
+        best_obj = current_obj
+        for idx in range(len(current_graphs)):
+            trial_graphs = current_graphs[:idx] + [Gs] + current_graphs[idx + 1:]
+            trial_obj = window_objective(trial_graphs, total_constraints, self.gamma)
+            if trial_obj > best_obj:
+                best_graphs = trial_graphs
+                best_obj = trial_obj
+
+        if best_graphs is current_graphs:
+            self._log("Skip: candidate does not improve set-level objective.")
+            return covered
+
+        W_k.clear()
+        for graph in best_graphs:
+            heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+        return window_coverage(best_graphs)
 
     def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
         # shells of edge indices
@@ -815,20 +770,22 @@ class ApxChase:
                     current_nodes = torch.unique(torch.cat([current_nodes, torch.tensor([int(u), int(w)], device=current_nodes.device)]))
                 # move on; do not revert the insertion (edge-insertion stream)
         if len(W_k) == 0:
-            # fallback: put H itself if nothing passed verification
-            covered = self._update_window(W_k, H, covered)
+            # Only allow the full observed graph as a fallback witness if it
+            # itself satisfies the witness definition.
+            if self.verify_witness_fn(self.model, root, H):
+                covered = self._update_window(W_k, H, covered)
 
         final_nodes = (W_k[0][2].num_nodes if len(W_k) > 0 else 0)
         self._log(f"Run stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ(W_k)|={len(covered)}, final_nodes={final_nodes}")
         if len(W_k) == 0 and self.debug:
-            self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking removes head-edges so backchase can trigger.")
+            self._log("No candidates admitted. Consider: increase budget B, relax VerifyWitness, or ensure masking preserves consequent matches so backchase can trigger.")
 
         S_k = [entry[2] for entry in sorted(W_k, key=lambda t: -t[0])]
         Sigma_star = covered
         # Annotate each witness with its grounded constraints (names) and repair sum
         annotated = []
         for Gs in S_k:
-            # Run Γ on the witness itself (head on Gs; cost vs clean is handled inside gamma_fn)
+            # Run Γ on the witness itself under the standard c -> P backchase semantics.
             grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
             try:
                 names = list(grounded_here)
@@ -872,6 +829,9 @@ class HeuChase(ApxChase):
         n_candidates = 0
         n_verified = 0
         n_admitted = 0
+        fallback_used = False
+        motif_candidates_used = False
+        supplemental_candidates_used = False
 
         for t in range(self.m):
             edge_mask = _candidate_by_edmonds(H, root, emb, noise_std=self.noise_std)
@@ -892,9 +852,18 @@ class HeuChase(ApxChase):
                     if self.debug:
                         self._log(f"[HeuChase]   admitted; |Γ|={len(covered)}, heap={len(W_k)}")
 
+        # HeuC is intentionally kept within a strict Edmonds/arborescence
+        # family for the main experiments. Do not fall through into Apx-like
+        # motif/mask generators here; if Edmonds fails to produce a witness,
+        # only the witness-gated full-graph fallback below remains.
+
         if len(W_k) == 0:
-            # Fallback: admit H itself
-            covered = self._update_window(W_k, H, covered)
+            # Keep fallback semantics consistent with ApxChase/ExhaustChase:
+            # the full observed graph may enter the window only if it is itself
+            # a valid witness under the original query.
+            if self.verify_witness_fn(self.model, root, H):
+                fallback_used = True
+                covered = self._update_window(W_k, H, covered)
 
         if self.debug:
             self._log(f"[HeuChase] stats: candidates={n_candidates}, verified={n_verified}, admitted={n_admitted}, final |W_k|={len(W_k)}, |Γ|={len(covered)}")
@@ -916,4 +885,18 @@ class HeuChase(ApxChase):
             except Exception:
                 pass
             annotated.append(Gs)
+        full_witness_edges = extract_witness_edges_in_full(H) if hasattr(H, '_nodes_in_full') else set()
+        fallback_selected = any(extract_witness_edges_in_full(Gs) == full_witness_edges for Gs in annotated)
+        self._last_run_stats = {
+            'num_candidates_generated': int(n_candidates),
+            'distinct_candidates_generated': int(n_candidates),
+            'num_candidates_verified': int(n_verified),
+            'num_candidates_admitted': int(n_admitted),
+            'num_selected_witnesses': int(len(annotated)),
+            'num_covered_constraints': int(len(Sigma_star)),
+            'fallback_used': bool(fallback_used),
+            'fallback_selected': bool(fallback_selected),
+            'motif_candidates_used': bool(motif_candidates_used),
+            'supplemental_candidates_used': bool(supplemental_candidates_used),
+        }
         return Sigma_star, annotated

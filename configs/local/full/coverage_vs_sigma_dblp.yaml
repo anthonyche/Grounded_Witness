@@ -1,0 +1,20 @@
+name: full_coverage_vs_sigma_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - default
+base:
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep:
+  sigma_size: [10, 20, 30, 40, 50]
+

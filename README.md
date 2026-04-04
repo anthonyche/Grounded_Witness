@@ -1,244 +1,193 @@
-# Grounding Graph Explanations with Data Constraints
+# GroundingGEXP
 
-This repository contains the implementation of our paper on grounding GNN explanations using data constraints and chase-based repair algorithms.
+GroundingGEXP is the current mainline repository for our constraint-grounded graph explanation experiments. The repository is organized around a single semantics-consistent experimental path:
 
-## 📋 Overview
+- each constraint is written as `φ = (P, c)`
+- `P` is the `antecedent`
+- `c` is the `consequent`
+- standard semantics:
+  - `chase: P -> c`
+  - `backchase: c -> P`
 
-This project implements several methods for explaining GNN predictions with data constraints:
-- **ApxIChase**
-- **HeuIChase**
-- **Exhaustive**: Exhaustive naivechase 
-- **Baselines**: GNNExplainer and PGExplainer
+The current mainline datasets are:
 
-## 🚀 Quick Start
+- `DBLP`
+- `Cora`
+- `MUTAG`
 
-### Installation
+## Mainline Semantics
+
+### Our methods
+
+The following methods first generate witness subgraphs `G_s`, then perform `G_s -> G_g` grounding / backchase:
+
+- `ApxC`
+- `HeuC`
+- `Exh`
+
+Under the current semantics:
+
+- `G_g` is only an auxiliary grounded provenance graph
+- `G_g` is never written back into the observed graph `G`
+- completion may add edges, but may not add nodes
+
+### Baselines
+
+The following baselines do **not** perform `G_s -> G_g` backchase expansion:
+
+- `GEX`
+- `PGX`
+
+Baselines only output a single explanation. A constraint is counted as covered only if that explanation itself strictly satisfies the constraint.
+
+### Coverage
+
+Coverage is computed per workload first, then averaged across workloads:
+
+- `coverage_ratio_global = |Covered(Q)| / |Σ|`
+- `coverage_ratio_normalized = |Covered(Q)| / |Active(Q)|`
+
+where:
+
+- `Hit_c(Q)`: constraints whose consequent `c` is matchable
+- `Active(Q)`: constraints whose consequent `c` is matchable and whose antecedent `P` is node-complete
+- `Covered(Q)`: constraints that can complete standard backchase within the local budget
+
+## Recommended Experiment Entry Point
+
+The only recommended experiment entry point is:
 
 ```bash
-# Clone the repository
-git clone https://github.com/anthonyche/Grounded_Witness.git
-cd Grounded_Witness
-
-# Install dependencies
-pip install -r requirements.txt
+python scripts/run_experiment_bundle.py --config config.yaml
 ```
 
-**Requirements:**
-- Python 3.10
-- PyTorch 2.3
-- PyTorch Geometric 2.6
-- See `requirements.txt` for full list
+This entry point:
 
-### Basic Usage
+- reads a single YAML config
+- precomputes the observed graph for each workload
+- shares the same observed graph across all methods for that workload
+- writes stable workload-level CSVs, method-level summaries, and metadata
+
+Older fragmented runners are no longer recommended.
+
+## Observed Graph Sharing and Runtime Definition
+
+For the same workload:
+
+- the observed graph is generated exactly once
+- `ApxC / HeuC / Exh / GEX / PGX` all reuse it
+- observed graph generation is treated as preprocessing
+- method runtime does **not** include that preprocessing time
+
+The observed graph is only allowed to change during an `incompleteness` factor study. Even there, the changed graph must be generated as a shared preprocessing step and must not be counted toward method runtime.
+
+## Manual Experiment Configuration
+
+The root `config.yaml` file is a neutral manual template. You can directly edit:
+
+- `dataset`
+- `model_name`
+- `methods`
+- `sigma_size`
+- `local_budget_k`
+- `L`
+- `gamma / alpha / beta`
+- `incompleteness`
+- `target_ratio`
+- `target_nodes` or `graph_positions`
+
+Ready-to-edit bundle templates are also provided:
+
+- `configs/bundles/manual_dblp.yaml`
+- `configs/bundles/manual_cora.yaml`
+- `configs/bundles/manual_mutag.yaml`
+
+### Example: DBLP overall runtime
 
 ```bash
-# Run experiments with default config
-python src/Run_Experiment_Node.py --config config.yaml
-
-# Run with custom settings
-python src/Run_Experiment_Node.py --config config.yaml --input <graph_index> --output <save_dir>
+python scripts/run_experiment_bundle.py --config config.yaml --force
 ```
 
-## Supported Datasets
+### Example: switching constraint pool mode
 
-| Dataset | Nodes | Edges | Classes | Type |
-|---------|-------|-------|---------|------|
-| **MUTAG** | 188 graphs | - | 2 | Graph Classification |
-| **Cora** | 2,708 | 5,429 | 7 | Node Classification |
-| **BAShape** | 2,020,000 | 12,055,704 | 4 | Synthetic |
-| **Yelp** | 716,847 | 13,954,819 | 100 | Node Classification |
-| **OGBN-Papers100M** | 111M | 1.6B | 172 | Large-scale |
-
-
-
-##  Configuration Guide
-
-Edit `config.yaml` to customize experiments:
-
-### Key Parameters
+Add one of the following to `config.yaml`:
 
 ```yaml
-# Experiment name (determines which method to run)
-exp_name: heuchase_mutag  # Options: heuchase_*, apxchase_*, gnnexplainer_*, pgexplainer_*
-
-# Data Constraint Parameters
-L: 2              # Number of GNN hops (neighborhood size)
-k: 6              # Window size for candidate generation
-Budget: 8         # Repair budget (max edge modifications)
-mask_ratio: 0.05  # Edge masking ratio (0.0-1.0)
-preserve_connectivity: true  # Keep graph connected during masking
-
-# Objective Weights
-alpha: 0.2    # Conciseness weight
-beta: 0.2     # Repair penalty weight  
-gamma: 0.6    # Coverage weight
-
-# Method-specific
-heuchase_m: 20           # Number of candidates for HeuIChase
-heuchase_noise_std: 0.2  # Noise for diversity in sampling
+constraint_pool_mode: balanced
 ```
 
-### Dataset Selection
+Supported values:
 
-Uncomment the desired dataset in `config.yaml`:
+- `original`
+- `balanced`
+- `coverage_only`
 
-```yaml
-# For MUTAG (graph classification)
-data_name: "MUTAG"
-model_name: "gcn_graph_3"
+If omitted, the dataset default constraint pool is used.
 
-# For Cora (node classification)
-# data_name: "Cora"
-# model_name: "gcn2"
-# target_nodes: [61, 1879, 570, ...]  # Nodes to explain
+## Output Files
 
-# For BAShape (synthetic)
-# data_name: "BAShape"
-# num_target_nodes: 100  # Auto-sample target nodes
+The bundle runner writes at least:
 
-# For OGBN-Papers100M (large-scale)
-# See config_ogbn_papers100m.yaml
-```
+- `outputs/csv/<run_name>_per_workload.csv`
+- `outputs/csv/<run_name>_method_summary.csv`
+- `outputs/csv/<run_name>_metadata.json`
 
-### Model Configuration
+The workload-level CSV explicitly separates:
 
-```yaml
-model_name: "gcn2"     # GCN with 2 layers
-# Options: gcn2, gat_graph_3, sage_graph_3, gcn_yelp_3, etc.
+- `candidate_count`
+- `verified_witness_count`
+- `selected_witness_count`
+- `covered_constraint_count`
 
-hidden_dim: 16         # Hidden layer dimension
-# Use 16 for BAShape, 32 for others
-```
+The current witness definition is:
 
-## 🔬 Running Experiments
+- `witness = verified candidate`
 
-### 1. Train GNN Models
+Selected witnesses and covered constraints are reported separately.
 
-```bash
-# Train on small datasets (MUTAG, Cora)
-python src/model.py --dataset MUTAG
+## Environment
 
-# Train on BAShape
-python train_BAShape.py
+- Python `3.10`
+- PyTorch `2.3+`
+- PyTorch Geometric `2.6+`
 
-# Train on TreeCycle (synthetic)
-python train_Treecycle.py
-```
+Optional PyG extensions such as `torch-scatter`, `torch-sparse`, `torch-cluster`, and `torch-spline-conv` should match the installed PyTorch version. If they do not, the code may still run, but runtime measurements can be distorted.
 
-Models are saved to `models/`.
+## Repository Layout
 
-### 2. Run Explanation Methods
-
-```bash
-# ApxIChase
-python src/Run_Experiment_Node.py --config config.yaml
-# (set exp_name: apxchase_mutag)
-
-# HeuIChase  
-python src/Run_Experiment_Node.py --config config.yaml
-# (set exp_name: heuchase_mutag)
-
-# GNNExplainer baseline
-python src/Run_Experiment_Node.py --config config.yaml
-# (set exp_name: gnnexplainer_mutag)
-
-# PGExplainer baseline
-python src/Run_Experiment_Node.py --config config.yaml
-# (set exp_name: pgexplainer_mutag)
-```
-
-Results are saved to `results/<dataset>/<method>/`.
-
-### 3. Large-Scale Experiments (OGBN-Papers100M)
-
-```bash
-# Distributed benchmark
-python src/benchmark_ogbn_distributed.py
-
-# TreeCycle distributed benchmark
-python benchmark_treecycle_distributed_v2.py
-```
-
-See `config_ogbn_papers100m.yaml` for large-scale configurations.
-
-
-### Scalability Experiments
-
-```bash
-# Figure 13: OGBN-Papers100M runtime vs workers
-python src/benchmark_ogbn_distributed.py
-
-# Figures 14-16: TreeCycle scalability
-python benchmark_treecycle_distributed_v2.py
-```
-
-## 📁 Project Structure
-
-```
+```text
 GroundingGEXP/
-├── config.yaml                      # Main configuration file
-├── config_ogbn_papers100m.yaml      # Large-scale config
-├── requirements.txt                 # Dependencies
+├── config.yaml
+├── configs/
+│   ├── bundles/
+│   └── local/
+├── scripts/
+│   ├── run_experiment_bundle.py
+│   ├── experiment_common.py
+│   ├── collect_results.py
+│   └── plot_full_experiments.py
 ├── src/
-│   ├── Run_Experiment_Node.py       # Main experiment runner
-│   ├── apxchase.py                  # ApxIChase implementation
-│   ├── heuchase.py                  # HeuIChase implementation
-│   ├── exhaustchase.py              # Exhaustive chase
-│   ├── baselines.py                 # GNNExplainer/PGExplainer
-│   ├── constraints.py               # Constraint definitions
-│   ├── model.py                     # GNN models
-│   └── utils.py                     # Utility functions
-├── datasets/                        # Auto-downloaded datasets
-├── models/                          # Trained GNN models
-├── results/                         # Experiment results
-├── Plot_Figures_2.py               # Generate paper figures
-└── README.md                        # This file
+│   ├── Run_Experiment.py
+│   ├── Run_Experiment_Node.py
+│   ├── grounding_semantics.py
+│   ├── constraint_mining.py
+│   ├── constraints.py
+│   ├── apxchase.py
+│   ├── heuchase.py
+│   ├── exhaustchase.py
+│   ├── baselines.py
+│   └── utils.py
+├── models/
+└── outputs/
 ```
 
-## 🎯 Key Configuration Examples
+## Current Status
 
-### Example 1: Quick Test on MUTAG
+The repository has been narrowed to the current mainline:
 
-```yaml
-exp_name: heuchase_mutag
-data_name: "MUTAG"
-model_name: "gcn_graph_3"
-L: 2
-k: 6
-Budget: 8
-heuchase_m: 20
-```
+- constraint definition as `(P, c)`
+- standard backchase `c -> P`
+- shared observed graph
+- `run_experiment_bundle.py` as the single recommended experiment entry point
 
-### Example 2: Coverage Experiment
-
-```yaml
-# Vary budget to test coverage
-Budget: 1    # Low budget
-# Budget: 2
-# Budget: 4
-# Budget: 6
-# Budget: 8  # High budget
-```
-
-### Example 3: Constraint Size Experiment
-
-```yaml
-# Vary number of constraints
-L: 1         # 1-hop neighborhood
-# L: 2       # 2-hop neighborhood
-# L: 3       # 3-hop neighborhood
-```
-
-### Example 4: Target Node Selection
-
-```yaml
-# Option 1: Auto-sample
-num_target_nodes: 100
-
-# Option 2: Manual selection
-target_nodes: [61, 1879, 570, 2039, 2668]
-```
-
-
-
-**Happy Experimenting! 🚀**
+Legacy large-scale experiments and older helper scripts are not part of the current default mainline.

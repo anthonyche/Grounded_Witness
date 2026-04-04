@@ -1,0 +1,25 @@
+name: local_weight_sensitivity_cora
+group: effectiveness
+datasets:
+  - cora
+methods:
+  - apxchase
+  - heuchase
+  - exhaustchase
+model_keys:
+  - default
+tie_alpha_beta_to_gamma: true
+base:
+  target_ratio: 0.01
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep:
+  gamma:
+    - 0.2
+    - 0.4
+    - 0.6
+    - 0.8
+

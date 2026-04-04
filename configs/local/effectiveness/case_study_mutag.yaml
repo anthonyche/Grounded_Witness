@@ -1,0 +1,19 @@
+name: optional_case_study_mutag
+group: case_study
+datasets:
+  - mutag
+methods:
+  - apxchase
+model_keys:
+  - default
+runner_script: src/visualize_case_study.py
+base:
+  target_ratio: 0.1
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+  graph_positions:
+    - 0
+sweep: {}

@@ -1,0 +1,21 @@
+name: full_fidelity_vs_L_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - default
+base:
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  incompleteness: 0.05
+sweep_items:
+  - {L: 1, model_key_override: gcn1}
+  - {L: 2, model_key_override: gcn2}
+  - {L: 3, model_key_override: gcn3}

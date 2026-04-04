@@ -1,0 +1,22 @@
+name: full_runtime_vs_model_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - gcn2
+  - gat2
+  - sage2
+base:
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep: {}
+

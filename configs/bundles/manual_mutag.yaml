@@ -1,0 +1,52 @@
+run_name: manual_mutag
+dataset: mutag
+model_name: gcn2
+methods:
+  - ApxC
+  - HeuC
+  - Exh
+  - GEX
+  - PGX
+
+factor_name: ""
+factor_values: []
+
+output_root: outputs/raw/bundles
+reuse_observed_graph_cache: true
+
+random_seed: 42
+sigma_size: 20
+local_budget_k: 2
+L: 2
+gamma: 1.0
+alpha: 0.5
+beta: 0.5
+incompleteness: 0.05
+target_ratio: 0.1
+
+graph_positions:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+
+constraint_source: mined
+constraint_rule_mode: standard_backchase
+constraint_filter_target_matchability: true
+preserve_connectivity: true
+max_masks: 1

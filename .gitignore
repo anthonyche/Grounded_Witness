@@ -3,13 +3,34 @@ __pycache__/
 *.pyo
 *.pyd
 *.swp
-.env
-.venv
+*.swo
 .DS_Store
-results/
-checkpoints/
-datasets/
+.env
+.venv/
+.pytest_cache/
+
+# Local data and generated artifacts
+
 cache/
+datasets/
+logs/
+outputs/
+results/
+
+# Local model checkpoints and training outputs
+models/*.pt
+models/*.pth
+training_log.txt
+
+
+outputs/
+
+# Local workspace files
+GroundingGEXP.code-workspace
+
+# Cluster / temporary files
 *.slurm
-*.txt
-*.png
+
+train_Treecycle.py
+TreeCycleGenerator.py
+worker_treecycle.py

@@ -1,0 +1,26 @@
+name: local_effectiveness_vary_k
+group: effectiveness
+datasets:
+  - cora
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - default
+base:
+  target_ratio: 0.01
+  sigma_size: 20
+  K: 6
+  L: 2
+  incompleteness: 0.05
+sweep:
+  local_budget_k:
+    - 1
+    - 2
+    - 4
+    - 6
+    - 8
+

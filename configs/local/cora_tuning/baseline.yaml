@@ -1,0 +1,11 @@
+name: cora_tuning_baseline
+description: Default local Cora configuration with pseudo-type clustering and ranked bounded generation.
+overrides:
+  constraint_source: hybrid
+  constraint_type_source: pseudo_type
+  n_node_types: 8
+  apx_seed_per_constraint: 2
+  apx_candidate_branch_factor: 3
+  apx_candidate_beam_width: 6
+  apx_candidate_max_masks: 48
+  apx_ranking_pool_factor: 3

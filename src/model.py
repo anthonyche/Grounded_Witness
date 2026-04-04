@@ -189,6 +189,21 @@ class GAT(torch.nn.Module):
         return F.log_softmax(x, dim=-1)
 
 
+class GAT_2(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(GAT_2, self).__init__()
+        heads = 8
+        self.conv1 = GATConv(input_dim, hidden_dim, heads=heads, dropout=0.6)
+        self.conv2 = GATConv(hidden_dim * heads, output_dim, heads=1, concat=False, dropout=0.6)
+
+    def forward(self, x, edge_index):
+        x = F.dropout(x, p=0.6, training=self.training)
+        x = F.elu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=0.6, training=self.training)
+        x = self.conv2(x, edge_index)
+        return F.log_softmax(x, dim=-1)
+
+
 class GIN(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
         super(GIN, self).__init__()
@@ -247,6 +262,20 @@ class GraphSAGE(torch.nn.Module):
         x = self.conv3(x, edge_index)
 
         return F.log_softmax(x, dim=-1)  # For NLL loss (single-label classification)
+
+
+class GraphSAGE_2(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(GraphSAGE_2, self).__init__()
+        self.conv1 = SAGEConv(input_dim, hidden_dim)
+        self.conv2 = SAGEConv(hidden_dim, output_dim)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.conv2(x, edge_index)
+        return F.log_softmax(x, dim=-1)
 
 # three layer GCN graph classifier
 class GCNGraphClassifier_3(torch.nn.Module):
@@ -393,18 +422,24 @@ def get_model(config):
     hidden_dim = config['hidden_dim']
     output_dim = config['output_dim']
 
-    if model_name == 'gcn':
+    if model_name in {'gcn', 'gcn3'}:
         model = GCN(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         return model
-    elif model_name == 'gat':
+    elif model_name in {'gat', 'gat3'}:
         model = GAT(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         return model 
+    elif model_name == 'gat2':
+        model = GAT_2(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
+        return model
     elif model_name == 'gin':
         model = GIN(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         return model 
-    elif model_name == 'sage':
+    elif model_name in {'sage', 'sage3'}:
         model = GraphSAGE(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         return model 
+    elif model_name == 'sage2':
+        model = GraphSAGE_2(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
+        return model
     elif model_name == 'gcn1':
         model = GCN_1(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         return model 
@@ -589,11 +624,11 @@ def main(config_file, output_dir):
     # `gcn_graph_3`), map it to its node-level counterpart so the forward
     # signature matches (x, edge_index).
     graph2node = {
-        'gcn_graph_1': 'gcn',
-        'gcn_graph_2': 'gcn',
-        'gcn_graph_3': 'gcn',
-        'gat_graph_3': 'gat',
-        'sage_graph_3': 'sage',
+        'gcn_graph_1': 'gcn1',
+        'gcn_graph_2': 'gcn2',
+        'gcn_graph_3': 'gcn3',
+        'gat_graph_3': 'gat3',
+        'sage_graph_3': 'sage3',
     }
     orig_name = config.get('model_name')
     if orig_name in graph2node:

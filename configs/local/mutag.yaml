@@ -1,0 +1,23 @@
+data_name: MUTAG
+task: graph
+default_model_key: gcn2
+min_targets: 19
+default_target_ratio: 0.1
+models:
+  gcn1: gcn_graph_1
+  gcn2: gcn_graph_2
+  gcn3: gcn_graph_3
+  gat3: gat_graph_3
+  sage3: sage_graph_3
+config:
+  batch_size: 32
+  input_dim: 7
+  output_dim: 2
+  data_size: 188
+  target_ratio: 0.1
+  preserve_connectivity: true
+  constraint_templates:
+    - extension
+  constraint_filter_target_matchability: true
+  constraint_target_probe_samples: 64
+  constraint_target_min_hit: 1

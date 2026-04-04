@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 from typing import Dict, List, Tuple, Any
@@ -23,15 +24,23 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_constraint_coverage
+from utils import load_config, set_seed, dataset_func, get_save_path, compute_fidelity_minus, compute_direct_constraint_coverage
 from model import get_model
 from apxchase import ApxChase
 from exhaustchase import ExhaustChase
 from constraints import get_constraints
+from constraint_mining import resolve_constraints
 from Edge_masking import mask_edges_for_node_classification
 from baselines import run_gnn_explainer_node, PGExplainerBaseline
 
 import time
+
+try:
+    from matcher import find_pattern_matches as _pattern_match_fn  # type: ignore
+    from grounding_semantics import constraint_activation_summary as _constraint_activation_summary  # type: ignore
+except Exception:
+    _pattern_match_fn = None
+    _constraint_activation_summary = None
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -63,33 +72,105 @@ def _load_trained_model(config: Dict[str, Any], device: torch.device) -> torch.n
     return model
 
 
+def _node_witness_metrics(chaser: ApxChase, witness: Data, reference_graph: Data, device: torch.device) -> Dict[str, Any]:
+    conc = float(chaser.conc_fn(witness))
+    aln = float(getattr(witness, "_alignment", chaser.rpr_fn(witness)))
+    fid_minus = float(compute_fidelity_minus(chaser.model, reference_graph, witness, device, is_node=True))
+    q_score = float(chaser.alpha * conc + chaser.beta * aln)
+    return {
+        "num_nodes": int(witness.num_nodes),
+        "num_edges": int(witness.edge_index.size(1)),
+        "conc": conc,
+        "alignment": aln,
+        "q": q_score,
+        "fidelity_minus": fid_minus,
+        "delta_edges": list(getattr(witness, "delta_edges", [])),
+        "supporting_edges": list(getattr(witness, "supporting_edges", [])),
+        "grounded_constraints": list(getattr(witness, "grounded_constraints", [])),
+        "grounding_details": list(getattr(witness, "_grounding_details", [])),
+    }
+
+
+def _constraint_signature(constraints: List[dict]) -> str:
+    names = []
+    for constraint in constraints:
+        try:
+            names.append(str(constraint.get("name", constraint)))
+        except Exception:
+            names.append(str(constraint))
+    payload = json.dumps(sorted(names), ensure_ascii=False)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _observed_cache_dir(config: Dict[str, Any]) -> str:
+    root = os.path.join("artifacts", "observed_graph_cache", str(config.get("data_name", "dataset")).lower())
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _mask_ratio_token(value: Any) -> str:
+    if value is None:
+        return "none"
+    try:
+        return str(value).replace(".", "p")
+    except Exception:
+        return str(value)
+
+
+def _prepare_observed_node_workload(
+    data: Data,
+    target_node: int,
+    constraints: List[dict],
+    config: Dict[str, Any],
+) -> Tuple[Data, List[Tuple[int, int]], torch.Tensor]:
+    cache_root = _observed_cache_dir(config)
+    cache_key = (
+        f"node_{int(target_node)}"
+        f"__L_{int(config.get('L', 2))}"
+        f"__max_masks_{int(config.get('max_masks', 1))}"
+        f"__mask_ratio_{_mask_ratio_token(config.get('mask_ratio', None))}"
+        f"__seed_{int(config.get('random_seed', 0))}"
+        f"__pc_{1 if bool(config.get('preserve_connectivity', True)) else 0}"
+        f"__constraints_{_constraint_signature(constraints)}.pt"
+    )
+    cache_path = os.path.join(cache_root, cache_key)
+    if os.path.exists(cache_path):
+        payload = torch.load(cache_path, map_location="cpu")
+        return payload["observed_subgraph"], payload["dropped_edges"], payload["node_subset"]
+
+    observed_subgraph, dropped_edges, node_subset = mask_edges_for_node_classification(
+        data,
+        target_node,
+        constraints,
+        num_hops=config.get("L", 2),
+        max_masks=config.get("max_masks", 1),
+        mask_ratio=config.get("mask_ratio", None),
+        seed=config.get("random_seed"),
+    )
+    torch.save(
+        {
+            "observed_subgraph": observed_subgraph.cpu(),
+            "dropped_edges": dropped_edges,
+            "node_subset": node_subset.cpu(),
+        },
+        cache_path,
+    )
+    return observed_subgraph, dropped_edges, node_subset
+
+
 def _run_one_node_apxchase(
     target_node: int,
-    data: Data,
+    observed_subgraph: Data,
+    dropped_edges: List[Tuple[int, int]],
     constraints: List[dict],
     config: Dict[str, Any],
     device: torch.device,
     chaser: ApxChase
 ) -> Tuple[float, int, float, float, float]:
     """Run ApxChase on a single target node."""
-    
-    # Extract L-hop subgraph and apply constraint-based masking
-    masked_subgraph, dropped_edges, node_subset = mask_edges_for_node_classification(
-        data,
-        target_node,
-        constraints,
-        num_hops=config.get("L", 2),
-        max_masks=config.get("max_masks", 1),
-        mask_ratio=config.get("mask_ratio", None),  # Use ratio if specified
-        seed=config.get("random_seed"),
-    )
-    
-    # Store clean version for repair cost calculation
-    clean_subgraph = masked_subgraph.clone()
-    clean_subgraph.edge_index = masked_subgraph.edge_index.clone()
-    masked_subgraph._clean = clean_subgraph
-    
-    # Move to device
+
+    masked_subgraph = observed_subgraph.clone()
+    observed_num_edges = int(masked_subgraph.edge_index.size(1))
     masked_subgraph = masked_subgraph.to(device)
     
     # Get predictions
@@ -114,6 +195,11 @@ def _run_one_node_apxchase(
         Sigma_star, witnesses = result
     
     elapsed = t1 - t0
+    run_stats = dict(getattr(chaser, "_last_run_stats", {}) or {})
+    candidate_count = int(run_stats.get("num_candidates_generated", 0) or 0)
+    verified_witness_count = int(run_stats.get("num_candidates_verified", len(witnesses)) or 0)
+    selected_witness_count = int(len(witnesses))
+    admitted_candidate_count = int(run_stats.get("num_candidates_admitted", 0) or 0)
     
     # Extract coverage
     coverage_names = sorted(set([c.get("name", str(c)) if isinstance(c, dict) else str(c) for c in Sigma_star]))
@@ -122,35 +208,31 @@ def _run_one_node_apxchase(
     witness_summaries = []
     fidelity_scores = []
     conciseness_scores = []
-    original_num_edges = int(masked_subgraph.edge_index.size(1))
-    
     for w_idx, witness in enumerate(witnesses):
-        conc = chaser.conc_fn(witness)
-        rpr = chaser.rpr_fn(witness)
+        witness_metric = _node_witness_metrics(chaser, witness, masked_subgraph, device)
+        fidelity_scores.append(witness_metric["fidelity_minus"])
         num_edges = int(witness.edge_index.size(1))
-        
-        fid_minus = compute_fidelity_minus(chaser.model, masked_subgraph, witness, device, is_node=True)
-        fidelity_scores.append(fid_minus)
-        
-        conciseness = 1.0 - (num_edges / original_num_edges) if original_num_edges > 0 else 0.0
+        conciseness = 1.0 - (num_edges / observed_num_edges) if observed_num_edges > 0 else 0.0
         conciseness_scores.append(conciseness)
         
         witness_summaries.append({
             "index": w_idx,
-            "num_nodes": int(witness.num_nodes),
-            "num_edges": num_edges,
-            "conc": float(conc),
-            "rpr": float(rpr),
-            "fidelity_minus": float(fid_minus),
+            **witness_metric,
             "conciseness": float(conciseness),
         })
     
     avg_fidelity = float(np.mean(fidelity_scores)) if fidelity_scores else 0.0
     avg_conciseness = float(np.mean(conciseness_scores)) if conciseness_scores else 0.0
-    coverage_ratio = len(coverage_names) / len(constraints) if constraints else 0.0
+    total_constraints = len(constraints)
+    activation = _constraint_activation_summary(masked_subgraph, constraints, masked_subgraph, _pattern_match_fn) if _constraint_activation_summary else {"hit_names": set(), "active_names": set()}
+    hit_names = sorted(activation["hit_names"])
+    active_names = sorted(activation["active_names"])
+    coverage_ratio_global = len(coverage_names) / total_constraints if total_constraints > 0 else 0.0
+    coverage_ratio_normalized = len(coverage_names) / len(active_names) if active_names else 0.0
+    set_objective = float(sum(w["q"] for w in witness_summaries) + chaser.gamma * coverage_ratio_global)
     
     # Save results
-    save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment"))
+    save_root = config.get("save_dir") or get_save_path(config["data_name"], config.get("exp_name", "experiment"))
     os.makedirs(save_root, exist_ok=True)
     
     metrics = {
@@ -161,65 +243,67 @@ def _run_one_node_apxchase(
         "prediction_confidence": probs[masked_subgraph.target_node_subgraph_id].tolist(),
         "num_dropped_edges": len(dropped_edges),
         "dropped_edges": dropped_edges,
-        "num_witnesses": len(witnesses),
+        "candidate_count": candidate_count,
+        "verified_witness_count": verified_witness_count,
+        "selected_witness_count": selected_witness_count,
+        "admitted_candidate_count": admitted_candidate_count,
+        "num_witnesses": verified_witness_count,
         "coverage_size": len(coverage_names),
         "covered_constraints": coverage_names,
-        "total_constraints": len(constraints),
-        "coverage_ratio": float(coverage_ratio),
+        "covered_constraint_count": len(coverage_names),
+        "hit_constraint_count": len(hit_names),
+        "hit_constraints": hit_names,
+        "active_constraint_count": len(active_names),
+        "active_constraints": active_names,
+        "total_constraints": total_constraints,
+        "coverage_ratio": float(coverage_ratio_normalized),
+        "coverage_ratio_global": float(coverage_ratio_global),
+        "coverage_ratio_normalized": float(coverage_ratio_normalized),
         "witnesses": witness_summaries,
         "avg_fidelity_minus": avg_fidelity,
         "avg_conciseness": avg_conciseness,
-        "original_num_edges": original_num_edges,
+        "original_num_edges": observed_num_edges,
+        "set_coverage_ratio": float(coverage_ratio_normalized),
+        "set_coverage_ratio_global": float(coverage_ratio_global),
+        "set_coverage_ratio_normalized": float(coverage_ratio_normalized),
+        "set_objective_F": set_objective,
+        "runtime_sec": float(elapsed),
     }
+    metrics.update(run_stats)
     
     with open(os.path.join(save_root, f"metrics_node_{target_node}.json"), "w") as fp:
         json.dump(metrics, fp, indent=2)
     
-    torch.save(masked_subgraph.cpu(), os.path.join(save_root, f"masked_subgraph_node_{target_node}.pt"))
+    clean_subgraph = getattr(masked_subgraph, "_query_graph", None)
+    if clean_subgraph is not None:
+        torch.save(clean_subgraph.cpu(), os.path.join(save_root, f"clean_subgraph_node_{target_node}.pt"))
+    torch.save(masked_subgraph.cpu(), os.path.join(save_root, f"observed_subgraph_node_{target_node}.pt"))
     
-    print(f"[Node {target_node}] witnesses={len(witnesses)}, coverage={len(coverage_names)}/{len(constraints)}, "
-          f"fid={avg_fidelity:.4f}, conc={avg_conciseness:.4f}, time={elapsed:.4f}s")
-    
-    return elapsed, len(witnesses), avg_fidelity, avg_conciseness, coverage_ratio
+    print(
+        f"[Node {target_node}] witnesses={verified_witness_count}, "
+        f"selected_witnesses={selected_witness_count}, "
+        f"covered_constraints={len(coverage_names)}/{max(1, len(active_names))} active "
+        f"fid={avg_fidelity:.4f}, conc={avg_conciseness:.4f}, time={elapsed:.4f}s"
+    )
+
+    return elapsed, verified_witness_count, avg_fidelity, avg_conciseness, coverage_ratio_normalized
 
 
 def _run_one_node_baseline(
     target_node: int,
-    data: Data,
+    observed_subgraph: Data,
+    dropped_edges: List[Tuple[int, int]],
+    constraints: List[dict],
     config: Dict[str, Any],
     device: torch.device,
     model: torch.nn.Module,
     baseline_name: str,
 ) -> Tuple[float, int, float, float, float]:
     """Run GNNExplainer or PGExplainer on a single target node."""
-    
-    # Extract L-hop subgraph (without constraint masking for fair comparison)
-    from torch_geometric.utils import k_hop_subgraph, subgraph as pyg_subgraph
-    
-    # Get L-hop neighborhood nodes
-    node_subset, edge_index, mapping, edge_mask = k_hop_subgraph(
-        target_node,
-        num_hops=config.get("L", 2),
-        edge_index=data.edge_index,
-        num_nodes=data.num_nodes,
-        relabel_nodes=True,  # Relabel nodes to [0, num_nodes_in_subgraph)
-    )
-    
-    # Verify edge_index is within bounds
-    max_node_id = len(node_subset) - 1
-    if edge_index.numel() > 0:
-        # Ensure all edge indices are within [0, len(node_subset))
-        valid_edge_mask = (edge_index[0] <= max_node_id) & (edge_index[1] <= max_node_id)
-        edge_index = edge_index[:, valid_edge_mask]
-    
-    subgraph = Data(
-        x=data.x[node_subset],
-        edge_index=edge_index,
-        y=data.y[node_subset] if hasattr(data, 'y') and data.y is not None else None,
-        num_nodes=len(node_subset),
-    )
-    target_id = int(mapping.item())
-    subgraph = subgraph.to(device)
+
+    masked_subgraph = observed_subgraph.clone()
+    target_id = int(masked_subgraph.target_node_subgraph_id)
+    subgraph = masked_subgraph.to(device)
     
     # Run baseline explainer
     t0 = time.time()
@@ -240,7 +324,7 @@ def _run_one_node_baseline(
             target_node=target_id,
             epochs=config.get("pg_epochs", 30),
             device=device,
-            full_data=data,  # Pass full graph for training
+            full_data=subgraph,
         )
     else:
         raise ValueError(f"Unknown baseline: {baseline_name}")
@@ -255,7 +339,8 @@ def _run_one_node_baseline(
         return elapsed, 0, 0.0, 0.0, 0.0
     
     # Top-k edges as explanation
-    k = min(config.get("k", 10), edge_mask.size(0))
+    baseline_edge_topk = int(config.get("baseline_edge_topk", config.get("K", config.get("k", 10))))
+    k = min(baseline_edge_topk, edge_mask.size(0))
     _, topk_indices = torch.topk(edge_mask, k=k)
     
     # Build explanation subgraph
@@ -266,6 +351,10 @@ def _run_one_node_baseline(
         y=subgraph.y,
         num_nodes=subgraph.num_nodes,
     )
+    if hasattr(subgraph, "y_type") and subgraph.y_type is not None:
+        expl_subgraph.y_type = subgraph.y_type
+    if hasattr(subgraph, "node_labels") and subgraph.node_labels is not None:
+        expl_subgraph.node_labels = subgraph.node_labels
     
     # Compute Fidelity-
     fid_minus = compute_fidelity_minus(model, subgraph, expl_subgraph, device, is_node=True, target_node_id=target_id)
@@ -275,26 +364,32 @@ def _run_one_node_baseline(
     explanation_num_edges = int(expl_subgraph.edge_index.size(1))
     conciseness = 1.0 - (explanation_num_edges / original_num_edges) if original_num_edges > 0 else 0.0
     
-    # Compute Coverage - check if explanation subgraph satisfies constraints
-    # Note: Baselines don't use constraints to generate explanations,
-    # but we still evaluate whether the generated explanation satisfies constraints
-    from constraints import get_constraints
-    constraints = get_constraints(config.get("data_name", "Cora"))
-    covered_constraint_names, coverage_ratio = compute_constraint_coverage(
-        expl_subgraph, 
-        constraints, 
-        Budget=config.get("Budget", 8)
+    # Baselines only output G_s. They do not construct G_g, so a constraint is
+    # counted as covered only when G_s itself directly satisfies it.
+    coverage_stats = compute_direct_constraint_coverage(
+        expl_subgraph,
+        constraints,
+        workload_graph=expl_subgraph.cpu(),
+        return_stats=True,
     )
-    coverage = coverage_ratio
+    covered_constraint_names = coverage_stats["covered_constraint_names"]
+    coverage = coverage_stats["coverage_ratio_normalized"]
     
     # Save results
-    save_root = get_save_path(config["data_name"], config.get("exp_name", "experiment"))
+    save_root = config.get("save_dir") or get_save_path(config["data_name"], config.get("exp_name", "experiment"))
     os.makedirs(save_root, exist_ok=True)
     
     metrics = {
         "baseline": baseline_name,
         "target_node": int(target_node),
         "target_node_subgraph_id": target_id,
+        "num_dropped_edges": len(dropped_edges),
+        "dropped_edges": dropped_edges,
+        "candidate_count": 1,
+        "verified_witness_count": 1,
+        "selected_witness_count": 1,
+        "admitted_candidate_count": 1,
+        "num_witnesses": 1,
         "predicted_label": int(result["pred"]),
         "prediction_confidence": result["prob"].tolist() if hasattr(result["prob"], "tolist") else float(result["prob"]),
         "original_num_edges": original_num_edges,
@@ -302,10 +397,20 @@ def _run_one_node_baseline(
         "top_k": k,
         "fidelity_minus": float(fid_minus),
         "conciseness": float(conciseness),
-        "coverage_ratio": coverage,
+        "coverage_ratio": float(coverage),
+        "coverage_ratio_global": float(coverage_stats["coverage_ratio_global"]),
+        "coverage_ratio_normalized": float(coverage_stats["coverage_ratio_normalized"]),
+        "hit_constraint_count": int(coverage_stats["hit_constraint_count"]),
+        "hit_constraints": coverage_stats["hit_constraint_names"],
+        "active_constraint_count": int(coverage_stats["active_constraint_count"]),
+        "active_constraints": coverage_stats["active_constraint_names"],
+        "covered_constraint_count": int(coverage_stats["covered_constraint_count"]),
+        "delta_edges": list(getattr(expl_subgraph, "delta_edges", [])),
+        "supporting_edges": list(getattr(expl_subgraph, "supporting_edges", [])),
+        "grounded_constraints": list(getattr(expl_subgraph, "grounded_constraints", [])),
         "covered_constraints": covered_constraint_names,
         "total_constraints": len(constraints),
-        "elapsed_time": elapsed,
+        "runtime_sec": float(elapsed),
     }
     
     with open(os.path.join(save_root, f"metrics_node_{target_node}_{baseline_name}.json"), "w") as fp:
@@ -328,6 +433,10 @@ def main() -> None:
     
     set_seed(config.get("random_seed", 0))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    save_root = args.output or config.get("save_dir") or get_save_path(config["data_name"], config.get("exp_name", "experiment"))
+    config["save_dir"] = save_root
+    window_size = int(config.get("K", config.get("k", 10)))
+    local_budget = int(config.get("local_budget_k", config.get("Budget", 4)))
     
     # Load dataset
     dataset_resource = dataset_func(config)
@@ -341,21 +450,37 @@ def main() -> None:
     
     # Load model and constraints
     model = _load_trained_model(config, device)
-    constraints = get_constraints(config.get("data_name", "Cora"))
+    constraints = resolve_constraints(config, dataset_resource, model=model, device=device, save_dir=save_root)
     
     # Initialize explainer based on exp_name
     exp_name = str(config.get("exp_name", "apxchase_cora")).lower()
     
+    debug_mode = bool(config.get("debug", False))
+
     chaser = ApxChase(
         model=model,
         Sigma=constraints,
         L=config.get("L", 2),
-        k=config.get("k", 10),
-        B=config.get("Budget", 4),
+        k=window_size,
+        B=local_budget,
         alpha=config.get("alpha", 1.0),
         beta=config.get("beta", 1.0),
         gamma=config.get("gamma", 1.0),
-        debug=True,
+        seed_per_constraint=config.get("apx_seed_per_constraint", 2),
+        candidate_expand_steps=config.get("apx_candidate_expand_steps", 2),
+        candidate_branch_factor=config.get("apx_candidate_branch_factor", 3),
+        candidate_beam_width=config.get("apx_candidate_beam_width", 6),
+        candidate_max_masks=config.get("apx_candidate_max_masks", 48),
+        legacy_prefix_checkpoints=config.get("apx_legacy_prefix_checkpoints", 6),
+        use_ranked_candidate_prioritization=config.get("apx_use_ranked_candidate_prioritization", True),
+        use_task_aware_hybrid_generation=config.get("apx_use_task_aware_hybrid_generation", False),
+        ranking_pool_factor=config.get("apx_ranking_pool_factor", 3),
+        ranking_diversity_bonus=config.get("apx_ranking_diversity_bonus", 0.2),
+        max_near_full_candidates=config.get("apx_max_near_full_candidates", 16),
+        near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
+        near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
+        near_full_beam_width=config.get("apx_near_full_beam_width", 4),
+        debug=debug_mode,
     )
     
     # Determine target nodes: prioritize dataset-sampled targets over config
@@ -388,8 +513,9 @@ def main() -> None:
     
     if exp_name.startswith("apxchase"):
         for target_node in target_nodes:
+            observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
-                target_node, data, constraints, config, device, chaser
+                target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
             total_time += elapsed
             total_expl += count
@@ -403,17 +529,33 @@ def main() -> None:
             model=model,
             Sigma=constraints,
             L=config.get("L", 2),
-            k=config.get("k", 10),
-            B=config.get("Budget", 4),
+            k=window_size,
+            B=local_budget,
             alpha=config.get("alpha", 1.0),
             beta=config.get("beta", 1.0),
             gamma=config.get("gamma", 1.0),
             m=config.get("heuchase_m", 6),
-            debug=True,
+            noise_std=config.get("heuchase_noise_std", 1e-3),
+            seed_per_constraint=config.get("apx_seed_per_constraint", 2),
+            candidate_expand_steps=config.get("apx_candidate_expand_steps", 2),
+            candidate_branch_factor=config.get("apx_candidate_branch_factor", 3),
+            candidate_beam_width=config.get("apx_candidate_beam_width", 6),
+            candidate_max_masks=config.get("apx_candidate_max_masks", 48),
+            legacy_prefix_checkpoints=config.get("apx_legacy_prefix_checkpoints", 6),
+            use_ranked_candidate_prioritization=config.get("apx_use_ranked_candidate_prioritization", True),
+            use_task_aware_hybrid_generation=config.get("apx_use_task_aware_hybrid_generation", False),
+            ranking_pool_factor=config.get("apx_ranking_pool_factor", 3),
+            ranking_diversity_bonus=config.get("apx_ranking_diversity_bonus", 0.2),
+            max_near_full_candidates=config.get("apx_max_near_full_candidates", 16),
+            near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
+            near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
+            near_full_beam_width=config.get("apx_near_full_beam_width", 4),
+            debug=debug_mode,
         )
         for target_node in target_nodes:
+            observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
-                target_node, data, constraints, config, device, chaser
+                target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
             total_time += elapsed
             total_expl += count
@@ -426,17 +568,32 @@ def main() -> None:
             model=model,
             Sigma=constraints,
             L=config.get("L", 2),
-            k=config.get("k", 10),
-            B=config.get("Budget", 4),
+            k=window_size,
+            B=local_budget,
             alpha=config.get("alpha", 1.0),
             beta=config.get("beta", 1.0),
             gamma=config.get("gamma", 1.0),
+            seed_per_constraint=config.get("apx_seed_per_constraint", 2),
+            candidate_expand_steps=config.get("apx_candidate_expand_steps", 2),
+            candidate_branch_factor=config.get("apx_candidate_branch_factor", 3),
+            candidate_beam_width=config.get("apx_candidate_beam_width", 6),
+            candidate_max_masks=config.get("apx_candidate_max_masks", 48),
+            legacy_prefix_checkpoints=config.get("apx_legacy_prefix_checkpoints", 6),
+            use_ranked_candidate_prioritization=config.get("apx_use_ranked_candidate_prioritization", True),
+            use_task_aware_hybrid_generation=config.get("apx_use_task_aware_hybrid_generation", False),
+            ranking_pool_factor=config.get("apx_ranking_pool_factor", 3),
+            ranking_diversity_bonus=config.get("apx_ranking_diversity_bonus", 0.2),
+            max_near_full_candidates=config.get("apx_max_near_full_candidates", 16),
+            near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
+            near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
+            near_full_beam_width=config.get("apx_near_full_beam_width", 4),
             max_enforce_iterations=config.get("max_enforce_iterations", 100),
-            debug=True,
+            debug=debug_mode,
         )
         for target_node in target_nodes:
+            observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
-                target_node, data, constraints, config, device, chaser
+                target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
             total_time += elapsed
             total_expl += count
@@ -447,8 +604,9 @@ def main() -> None:
     elif exp_name.startswith("gnnexplainer"):
         from baselines import run_gnn_explainer_node
         for target_node in target_nodes:
+            observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
             elapsed, count, fid, conc, cov = _run_one_node_baseline(
-                target_node, data, config, device, model, "gnnexplainer"
+                target_node, observed_subgraph, dropped_edges, constraints, config, device, model, "gnnexplainer"
             )
             total_time += elapsed
             total_expl += count
@@ -459,8 +617,9 @@ def main() -> None:
     elif exp_name.startswith("pgexplainer"):
         from baselines import run_pgexplainer_node
         for target_node in target_nodes:
+            observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
             elapsed, count, fid, conc, cov = _run_one_node_baseline(
-                target_node, data, config, device, model, "pgexplainer"
+                target_node, observed_subgraph, dropped_edges, constraints, config, device, model, "pgexplainer"
             )
             total_time += elapsed
             total_expl += count

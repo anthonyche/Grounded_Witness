@@ -1,0 +1,26 @@
+name: dblp_small_regression
+group: regression
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - exhaustchase
+model_keys:
+  - default
+base:
+  target_ratio: 0.01
+  max_targets: 30
+  L: 2
+  sigma_size: 20
+  local_budget_k: 2
+  exhaustchase_timeout_sec: 600
+  constraint_source: mined
+  constraint_type_source: dblp_native_bucket
+  constraint_rule_mode: standard_backchase
+  constraint_filter_target_matchability: true
+  constraint_target_probe_samples: 64
+  constraint_target_min_hit: 1
+  constraint_use_cache: false
+  preserve_connectivity: true
+  max_masks: 1

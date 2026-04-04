@@ -1,0 +1,23 @@
+name: local_efficiency_vary_model
+group: efficiency
+datasets:
+  - cora
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - gcn
+  - gat
+  - sage
+base:
+  target_ratio: 0.01
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep: {}
+

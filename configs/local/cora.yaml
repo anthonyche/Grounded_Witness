@@ -1,0 +1,25 @@
+data_name: Cora
+task: node
+default_model_key: gcn2
+min_targets: 1
+default_target_ratio: 0.01
+models:
+  gcn1: gcn1
+  gcn2: gcn2
+  gcn3: gcn3
+  gat2: gat2
+  sage2: sage2
+  gat3: gat3
+  sage3: sage3
+config:
+  data_size: 2708
+  input_dim: 1433
+  output_dim: 7
+  num_test: 541
+  target_ratio: 0.01
+  preserve_connectivity: true
+  constraint_templates:
+    - extension
+  constraint_filter_target_matchability: true
+  constraint_target_probe_samples: 64
+  constraint_target_min_hit: 1

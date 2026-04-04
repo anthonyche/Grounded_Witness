@@ -22,15 +22,30 @@ Pattern = Dict[str, Any]
 TGD = Dict[str, Any]
 
 
+DBLP_NODE_TYPE: Dict[str, int] = {
+    'author': 0,
+    'paper': 1,
+    'term': 2,
+    'conference': 3,
+}
+
+DBLP_REL_TYPE: Dict[str, int] = {
+    'author_paper': 0,
+    'paper_term': 1,
+    'paper_conference': 2,
+}
+
+
 def validate_tgd(tgd: TGD) -> None:
     """
     Sanity-check a TGD dictionary. Raises AssertionError on bad shape.
-    We intentionally allow the body to introduce new nodes that do not
-    appear in the head (since backchase can insert them).
+    We intentionally allow P (antecedent) to introduce new variables that do
+    not appear in c (consequent), because backchase can recover missing edges
+    on witness-existing nodes.
     """
     assert 'name' in tgd and isinstance(tgd['name'], str)
-    assert 'head' in tgd and 'body' in tgd
-    for part in ('head', 'body'):
+    assert 'consequent' in tgd and 'antecedent' in tgd
+    for part in ('consequent', 'antecedent'):
         p = tgd[part]
         assert 'nodes' in p and 'edges' in p
         assert isinstance(p['nodes'], dict), "nodes must be a dict of var->spec"
@@ -43,10 +58,13 @@ def validate_tgd(tgd: TGD) -> None:
             assert not missing, f"distinct vars not in {part}.nodes: {missing}"
 
     # Check that all edge endpoints are declared in that part's nodes:
-    for part in ('head', 'body'):
+    for part in ('consequent', 'antecedent'):
         p = tgd[part]
         declared = set(p['nodes'].keys())
-        for (u, v) in p['edges']:
+        for edge in p['edges']:
+            assert isinstance(edge, (tuple, list)), "edge spec must be a tuple/list"
+            assert len(edge) in {2, 3}, "edge spec must be (u,v) or (u,v,rel)"
+            u, v = edge[0], edge[1]
             assert u in declared and v in declared, \
                 f"edge ({u},{v}) uses undeclared vars in {part}"
 
@@ -56,7 +74,7 @@ def validate_tgd(tgd: TGD) -> None:
 # ----------------------------------------------------------------------
 TGD_C6_CLOSURE_1 = {
   "name": "c6_closure",
-  "head": {   # 观测到的部分（触发条件）- 看到一条碳链（降低要求到3个节点）
+  "consequent": {   # c：当前 workload 中应先能匹配到的触发侧
     "nodes": {
       "A": {"in": [LABEL_ID['C']]},
       "B": {"in": [LABEL_ID['C']]},
@@ -65,7 +83,7 @@ TGD_C6_CLOSURE_1 = {
     "edges": [("A","B"), ("B","C")],
     "distinct": ["A","B","C"]
   },
-  "body": {   # 需要补全的部分（修复目标）- 完成苯环闭合（6个节点）
+  "antecedent": {   # P：backchase 需要补全成立的结构侧
     "nodes": {
       "A": {"in": [LABEL_ID['C']]},
       "B": {"in": [LABEL_ID['C']]},  # 添加B节点
@@ -81,7 +99,7 @@ TGD_C6_CLOSURE_1 = {
 
 # TGD_C6_CLOSURE_2 = {
 #     "name": "c6_closure_2",
-#     "head": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
+#     "consequent": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
 #         "nodes": {
 #         "A": {"in": [LABEL_ID['C']]},
 #         "B": {"in": [LABEL_ID['C']]},
@@ -93,7 +111,7 @@ TGD_C6_CLOSURE_1 = {
 #         "edges": [("A","B"), ("B","C"), ("C","D"), ("D","E"), ("E","F")],
 #         "distinct": ["A","B","C","D","E","F"]
 #     },
-#     "body": {   # 需要补全或验证的部分 - 只要求闭合边
+#     "antecedent": {   # 需要补全或验证的部分 - 只要求闭合边
 #         "nodes": {
 #         "A": {"in": [LABEL_ID['C']]},
 #         "F": {"in": [LABEL_ID['C']]}
@@ -105,7 +123,7 @@ TGD_C6_CLOSURE_1 = {
 
 # TGD_C6_CLOSURE_3 = {
 #     "name": "c6_closure_3",
-#     "head": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
+#     "consequent": {   # 已观测到的部分（触发条件）- 要求6个节点都存在
 #         "nodes": {
 #         "A": {"in": [LABEL_ID['C']]},
 #         "B": {"in": [LABEL_ID['C']]},
@@ -117,7 +135,7 @@ TGD_C6_CLOSURE_1 = {
 #         "edges": [("A","B"), ("B","C"), ("C","D"), ("D","E"), ("E","F")],
 #         "distinct": ["A","B","C","D","E","F"]
 #     },
-#     "body": {   # 需要补全或验证的部分 - 只要求闭合边
+#     "antecedent": {   # 需要补全或验证的部分 - 只要求闭合边
 #         "nodes": {
 #         "A": {"in": [LABEL_ID['C']]},
 #         "F": {"in": [LABEL_ID['C']]}
@@ -129,7 +147,7 @@ TGD_C6_CLOSURE_1 = {
 
 TGD_NITRO_ON_AROMATIC = {
     "name": "nitro_on_aromatic_completion",
-    "body": {   
+    "antecedent": {   
         "nodes": {
             "C": {"in": [LABEL_ID['C']]},
             "N": {"in": [LABEL_ID['N']]},
@@ -138,7 +156,7 @@ TGD_NITRO_ON_AROMATIC = {
         "edges": [("C","N"), ("N","O1")],
         "distinct": ["C", "N", "O1"]
     },
-    "head": {   
+    "consequent": {   
         "nodes": {
             "N": {"in": [LABEL_ID['N']]},
             "O2": {"in": [LABEL_ID['O']]},
@@ -149,7 +167,7 @@ TGD_NITRO_ON_AROMATIC = {
 }
 TGD_NITRO_ON_NITRO = {
     "name": "nitro_on_nitro_completion",
-    "body": {   
+    "antecedent": {   
         "nodes": {
             "N": {"in": [LABEL_ID['N']]},
             "O1": {"in": [LABEL_ID['O']]},
@@ -157,7 +175,7 @@ TGD_NITRO_ON_NITRO = {
         "edges": [("N","O1")],
         "distinct": ["N", "O1"]
     },
-    "head": {   
+    "consequent": {   
         "nodes": {
             "N": {"in": [LABEL_ID['N']]},
             "O2": {"in": [LABEL_ID['O']]},
@@ -170,7 +188,7 @@ TGD_NITRO_ON_NITRO = {
 
 TGD_C_DOUBLE_O_LIKE = {
     "name": "di-oxy_on_Carbon",
-    "body": {   
+    "antecedent": {   
         "nodes": {
             "C": {"in": [LABEL_ID['C']]},
             "O1": {"in": [LABEL_ID['O']]},
@@ -178,7 +196,7 @@ TGD_C_DOUBLE_O_LIKE = {
         "edges": [("C","O1")],
         "distinct": ["C", "O1"]
     },
-    "head": {  
+    "consequent": {  
         "nodes": {
             "C": {"in": [LABEL_ID['C']]},
             "O2": {"in": [LABEL_ID['O']]},
@@ -190,7 +208,7 @@ TGD_C_DOUBLE_O_LIKE = {
 
 TGD_ETHER_LIKE = {
     "name": "ether_like_completion",
-    "body": {   # C-O-C 结构,C-O已有
+    "antecedent": {   # C-O-C 结构,C-O已有
         "nodes": {
             "C1": {"in": [LABEL_ID['C']]},
             "O": {"in": [LABEL_ID['O']]},
@@ -198,7 +216,7 @@ TGD_ETHER_LIKE = {
         "edges": [("C1","O")],
         "distinct": ["C1", "O"]
     },
-    "head": {   # O-C2
+    "consequent": {   # O-C2
         "nodes": {
             "O": {"in": [LABEL_ID['O']]},
             "C2": {"in": [LABEL_ID['C']]},
@@ -210,7 +228,7 @@ TGD_ETHER_LIKE = {
 
 TGD_HALOGEN_ANCHOR = {
     "name": "halogen_anchor_completion",
-    "body": {   # C-X 结构, X为卤素
+    "antecedent": {   # C-X 结构, X为卤素
         "nodes": {
             "C":{"in":[LABEL_ID['C']]}, 
             "X":{"in":[LABEL_ID['Cl'], LABEL_ID['Br'], LABEL_ID['F'], LABEL_ID['I']]}
@@ -218,7 +236,7 @@ TGD_HALOGEN_ANCHOR = {
         "edges": [("C","X")],
         "distinct": ["C","X"]
     },
-    "head": {   # C-C 卤代碳链回碳骨架
+    "consequent": {   # C-C 卤代碳链回碳骨架
         "nodes": {
             "C":{"in":[LABEL_ID['C']]}, 
             "C2":{"in":[LABEL_ID['C']]}
@@ -230,7 +248,7 @@ TGD_HALOGEN_ANCHOR = {
 
 TGD_AMINE_DI_C = {
     "name": "amine_di_carbon_completion",  # N–C 已见 ⇒ N–C₂（胺的二价/取代倾向，宽松先验）
-    "body": {
+    "antecedent": {
         "nodes": {
             "N":{"in":[LABEL_ID['N']]}, 
             "C1":{"in":[LABEL_ID['C']]}
@@ -238,7 +256,7 @@ TGD_AMINE_DI_C = {
         "edges": [("N","C1")],
         "distinct": ["N","C1"]
     },
-    "head": {
+    "consequent": {
         "nodes": {
             "N":{"in":[LABEL_ID['N']]}, 
             "C2":{"in":[LABEL_ID['C']]}
@@ -253,9 +271,8 @@ TGD_AMINE_DI_C = {
 # Add more TGDs to this list as you design them.
 CONSTRAINTS_MUTAG: List[TGD] = []
 
-# === 苯环闭合约束（用于可视化测试）===
-validate_tgd(TGD_C6_CLOSURE_1)
-CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_1)
+# === 非标准 closure 规则不再进入主链静态池 ===
+# `c6_closure` 使用 multi-edge consequent，不再作为标准 backchase 主链约束启用。
 # validate_tgd(TGD_C6_CLOSURE_2)
 # CONSTRAINTS_MUTAG.append(TGD_C6_CLOSURE_2)
 # validate_tgd(TGD_C6_CLOSURE_3)
@@ -296,12 +313,12 @@ CONSTRAINTS_MUTAG.append(TGD_NITRO_ON_NITRO)
 # Type distribution: [15055, 53286, 35267, 108357, 59889, 33919, 37681, 88871, ...]
 # Type 3 is most common (108357 nodes), use it for patterns
 
-# TGD 1: Triangle Completion for Type-3 (1-edge HEAD → 2-edge BODY)
-# HEAD: If we see A→B edge between type-3 nodes
-# BODY: Then there should exist a third node C (type-3) with A→C and C→B (triangle)
+# TGD 1: Triangle completion for Type-3 (single consequent edge -> antecedent triangle support)
+# Consequent: if we see A→B between type-3 nodes
+# Antecedent: there should exist a third node C (type-3) with A→C and C→B
 TGD_YELP_TRIANGLE_TYPE3 = {
     "name": "yelp_triangle_type3",
-    "head": {
+    "consequent": {
         "nodes": {
             "A":{"in": [3]},  # Type 3 (108K nodes, 5 in subgraph)
             "B":{"in": [3]},
@@ -309,7 +326,7 @@ TGD_YELP_TRIANGLE_TYPE3 = {
         "edges": [("A", "B")],  # Single edge observed
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A":{"in": [3]},
             "B":{"in": [3]},
@@ -321,10 +338,10 @@ TGD_YELP_TRIANGLE_TYPE3 = {
 }
 
 
-# TGD 2: Triangle Completion for Type-7 (1-edge HEAD → 2-edge BODY)
+# TGD 2: Triangle completion for Type-7 (single consequent edge -> antecedent triangle support)
 TGD_YELP_TRIANGLE_TYPE7 = {
     "name": "yelp_triangle_type7",
-    "head": {
+    "consequent": {
         "nodes": {
             "A":{"in": [7]},  # Type 7 (88K nodes, 3 in subgraph)
             "B":{"in": [7]},
@@ -332,7 +349,7 @@ TGD_YELP_TRIANGLE_TYPE7 = {
         "edges": [("A", "B")],
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A":{"in": [7]},
             "B":{"in": [7]},
@@ -343,10 +360,10 @@ TGD_YELP_TRIANGLE_TYPE7 = {
     }
 }
 
-# TGD 3: Triangle Completion for Type-1 (1-edge HEAD → 2-edge BODY)
+# TGD 3: Triangle completion for Type-1 (single consequent edge -> antecedent triangle support)
 TGD_YELP_TRIANGLE_TYPE1 = {
     "name": "yelp_triangle_type1",
-    "head": {
+    "consequent": {
         "nodes": {
             "A":{"in": [1]},  # Type 1 (53K nodes)
             "B":{"in": [1]},
@@ -354,7 +371,7 @@ TGD_YELP_TRIANGLE_TYPE1 = {
         "edges": [("A", "B")],
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A":{"in": [1]},
             "B":{"in": [1]},
@@ -365,10 +382,10 @@ TGD_YELP_TRIANGLE_TYPE1 = {
     }
 }
 
-# TGD 4: Triangle Completion for Type-4 (1-edge HEAD → 2-edge BODY)
+# TGD 4: Triangle completion for Type-4 (single consequent edge -> antecedent triangle support)
 TGD_YELP_TRIANGLE_TYPE4 = {
     "name": "yelp_triangle_type4",
-    "head": {
+    "consequent": {
         "nodes": {
             "A":{"in": [4]},  # Type 4 (59K nodes)
             "B":{"in": [4]},
@@ -376,7 +393,7 @@ TGD_YELP_TRIANGLE_TYPE4 = {
         "edges": [("A", "B")],
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A":{"in": [4]},
             "B":{"in": [4]},
@@ -395,7 +412,7 @@ TGD_YELP_TRIANGLE_TYPE4 = {
 # Bridge 1: Type-1 nodes via Type-4 bridge
 TGD_YELP_BRIDGE_1_VIA_4 = {
     "name": "yelp_bridge_type1_via_type4",
-    "head": {
+    "consequent": {
         "nodes": {
             "A1":{"in": [1]},  # Type 1 (53K nodes)
             "B": {"in": [4]},  # Type 4 bridge (59K nodes)
@@ -404,7 +421,7 @@ TGD_YELP_BRIDGE_1_VIA_4 = {
         "edges": [("A1", "B"), ("B", "A2")],
         "distinct": ["A1", "B", "A2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A1":{"in": [1]},
             "A2":{"in": [1]},
@@ -417,7 +434,7 @@ TGD_YELP_BRIDGE_1_VIA_4 = {
 # Bridge 2: Type-3 nodes via Type-7 bridge
 TGD_YELP_BRIDGE_3_VIA_7 = {
     "name": "yelp_bridge_type3_via_type7",
-    "head": {
+    "consequent": {
         "nodes": {
             "A1":{"in": [3]},  # Type 3 (108K nodes - most common)
             "B": {"in": [7]},  # Type 7 bridge (88K nodes)
@@ -426,7 +443,7 @@ TGD_YELP_BRIDGE_3_VIA_7 = {
         "edges": [("A1", "B"), ("B", "A2")],
         "distinct": ["A1", "B", "A2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A1":{"in": [3]},
             "A2":{"in": [3]},
@@ -439,7 +456,7 @@ TGD_YELP_BRIDGE_3_VIA_7 = {
 # Bridge 3: Type-4 nodes via Type-1 bridge (reverse of Bridge 1)
 TGD_YELP_BRIDGE_4_VIA_1 = {
     "name": "yelp_bridge_type4_via_type1",
-    "head": {
+    "consequent": {
         "nodes": {
             "A1":{"in": [4]},  # Type 4
             "B": {"in": [1]},  # Type 1 bridge
@@ -448,7 +465,7 @@ TGD_YELP_BRIDGE_4_VIA_1 = {
         "edges": [("A1", "B"), ("B", "A2")],
         "distinct": ["A1", "B", "A2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A1":{"in": [4]},
             "A2":{"in": [4]},
@@ -461,7 +478,7 @@ TGD_YELP_BRIDGE_4_VIA_1 = {
 # Bridge 4: Type-0 nodes via Type-3 bridge (smaller type via common type)
 TGD_YELP_BRIDGE_0_VIA_3 = {
     "name": "yelp_bridge_type0_via_type3",
-    "head": {
+    "consequent": {
         "nodes": {
             "A1":{"in": [0]},  # Type 0 (15K nodes)
             "B": {"in": [3]},  # Type 3 bridge (108K - most common)
@@ -470,7 +487,7 @@ TGD_YELP_BRIDGE_0_VIA_3 = {
         "edges": [("A1", "B"), ("B", "A2")],
         "distinct": ["A1", "B", "A2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A1":{"in": [0]},
             "A2":{"in": [0]},
@@ -483,7 +500,7 @@ TGD_YELP_BRIDGE_0_VIA_3 = {
 # Bridge 5: Type-2 nodes via Type-6 bridge (mid-size types)
 TGD_YELP_BRIDGE_2_VIA_6 = {
     "name": "yelp_bridge_type2_via_type6",
-    "head": {
+    "consequent": {
         "nodes": {
             "A1":{"in": [2]},  # Type 2 (35K nodes)
             "B": {"in": [6]},  # Type 6 bridge (37K nodes)
@@ -492,7 +509,7 @@ TGD_YELP_BRIDGE_2_VIA_6 = {
         "edges": [("A1", "B"), ("B", "A2")],
         "distinct": ["A1", "B", "A2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A1":{"in": [2]},
             "A2":{"in": [2]},
@@ -506,7 +523,7 @@ TGD_YELP_BRIDGE_2_VIA_6 = {
 # Triangle (1 variant) + Square + Bridges (5 variants) = 7 total
 CONSTRAINTS_YELP: List[TGD] = []
 
-# Triangle completion constraints (1-edge HEAD → 2-edge BODY)
+# Triangle completion constraints (single consequent edge -> two-edge antecedent support)
 validate_tgd(TGD_YELP_TRIANGLE_TYPE3)
 CONSTRAINTS_YELP.append(TGD_YELP_TRIANGLE_TYPE3)
 validate_tgd(TGD_YELP_TRIANGLE_TYPE7)
@@ -516,7 +533,7 @@ CONSTRAINTS_YELP.append(TGD_YELP_TRIANGLE_TYPE1)
 validate_tgd(TGD_YELP_TRIANGLE_TYPE4)
 CONSTRAINTS_YELP.append(TGD_YELP_TRIANGLE_TYPE4)
 
-# Keep bridge patterns (cross-type, 2-edge HEAD)
+# Keep bridge patterns (cross-type, multi-edge consequent)
 validate_tgd(TGD_YELP_BRIDGE_1_VIA_4)
 CONSTRAINTS_YELP.append(TGD_YELP_BRIDGE_1_VIA_4)
 validate_tgd(TGD_YELP_BRIDGE_3_VIA_7)
@@ -532,158 +549,137 @@ CONSTRAINTS_YELP.append(TGD_YELP_BRIDGE_2_VIA_6)
 # ----------------------------------------------------------------------
 # Constraints for Cora (Citation Network - Node Classification)
 # ----------------------------------------------------------------------
-# Cora is a citation network with 7 paper categories:
-#   0: Case_Based
-#   1: Genetic_Algorithms  
-#   2: Neural_Networks
-#   3: Probabilistic_Methods
-#   4: Reinforcement_Learning
-#   5: Rule_Learning
-#   6: Theory
-#
-# Citation patterns in academic networks:
-#   1. Papers in the same field cite each other (homophily)
-#   2. Review papers cite many papers in the field
-#   3. Transitivity: if A cites B, and B cites C, likely A and C are related
-#
-# Design principles:
-#   - Use actual node labels (y) instead of synthetic types
-#   - Capture citation homophily (same-class citations)
-#   - Use directed edges (A→B means A cites B)
+# Cora constraints use pseudo-type IDs rather than ground-truth paper classes.
+# The numeric IDs below should be read as training-derived schema-like types.
+# They are intentionally type-agnostic in wording to avoid label leakage.
 
-# TGD 1: Citation Homophily - Same Class Co-citation
-# If paper A and B (same class i) both cite paper C (same class i), 
-# then A and B likely cite each other (they work on related topics)
+# TGD 1: typed co-neighborhood closure
 TGD_CORA_CITATION_TRIANGLE = {
-    "name": "cora_citation_triangle",
-    "head": {
-        "nodes": {
-            "A": {"in": list(range(7))},  # Any class
-            "B": {"in": list(range(7))},  # Same class as A
-            "C": {"in": list(range(7))},  # Same class as A and B
-        },
-        "edges": [("A", "C"), ("B", "C")],  # A and B both cite C (co-citation)
-        "distinct": ["A", "B", "C"]
-    },
-    "body": {
+    "name": "cora_type_triangle",
+    "consequent": {
         "nodes": {
             "A": {"in": list(range(7))},
             "B": {"in": list(range(7))},
             "C": {"in": list(range(7))},
         },
-        "edges": [("A", "B")],  # Then A cites B (or B cites A)
+        "edges": [("A", "C"), ("B", "C")],
+        "distinct": ["A", "B", "C"]
+    },
+    "antecedent": {
+        "nodes": {
+            "A": {"in": list(range(7))},
+            "B": {"in": list(range(7))},
+            "C": {"in": list(range(7))},
+        },
+        "edges": [("A", "B")],
         "distinct": ["A", "B", "C"]
     }
 }
 
-# TGD 2: Cross-Field Citation (NN ↔ RL)
-# If NN paper A and RL paper B both cite bridge paper C, then A and B are related
+# TGD 2: bridge closure over pseudo-types 2 and 4
 TGD_CORA_NN_RL_BRIDGE = {
-    "name": "cora_nn_rl_citation",
-    "head": {
-        "nodes": {
-            "A": {"in": [2]},  # Neural Networks paper
-            "B": {"in": [4]},  # Reinforcement Learning paper
-            "C": {"in": [2, 4]},  # Bridge paper (NN or RL)
-        },
-        "edges": [("A", "C"), ("B", "C")],  # Both cite C (co-citation)
-        "distinct": ["A", "B", "C"]
-    },
-    "body": {
+    "name": "cora_type_bridge_2_4",
+    "consequent": {
         "nodes": {
             "A": {"in": [2]},
             "B": {"in": [4]},
             "C": {"in": [2, 4]},
         },
-        "edges": [("A", "B")],  # Then A cites B (cross-field citation)
+        "edges": [("A", "C"), ("B", "C")],
+        "distinct": ["A", "B", "C"]
+    },
+    "antecedent": {
+        "nodes": {
+            "A": {"in": [2]},
+            "B": {"in": [4]},
+            "C": {"in": [2, 4]},
+        },
+        "edges": [("A", "B")],
         "distinct": ["A", "B", "C"]
     }
 }
 
-# TGD 3: Theory Papers as Hubs
-# If two applied papers A and B both cite the same Theory paper T, then A and B are related
+# TGD 3: hub-type closure around pseudo-type 6
 TGD_CORA_THEORY_HUB = {
-    "name": "cora_theory_hub",
-    "head": {
-        "nodes": {
-            "T": {"in": [6]},  # Theory paper (hub)
-            "A": {"in": [0, 1, 2, 3, 4, 5]},  # Applied paper 1 (not Theory)
-            "B": {"in": [0, 1, 2, 3, 4, 5]},  # Applied paper 2 (not Theory)
-        },
-        "edges": [("A", "T"), ("B", "T")],  # Both cite Theory (co-citation)
-        "distinct": ["T", "A", "B"]
-    },
-    "body": {
+    "name": "cora_type_hub_6",
+    "consequent": {
         "nodes": {
             "T": {"in": [6]},
             "A": {"in": [0, 1, 2, 3, 4, 5]},
             "B": {"in": [0, 1, 2, 3, 4, 5]},
         },
-        "edges": [("A", "B")],  # Then A cites B (or vice versa)
+        "edges": [("A", "T"), ("B", "T")],
+        "distinct": ["T", "A", "B"]
+    },
+    "antecedent": {
+        "nodes": {
+            "T": {"in": [6]},
+            "A": {"in": [0, 1, 2, 3, 4, 5]},
+            "B": {"in": [0, 1, 2, 3, 4, 5]},
+        },
+        "edges": [("A", "B")],
         "distinct": ["T", "A", "B"]
     }
 }
 
-# TGD 4: Probabilistic Methods ↔ Neural Networks
-# If Prob and NN papers both cite a bridge paper, they're related (Bayesian NNs, etc.)
+# TGD 4: bridge closure over pseudo-types 3 and 2
 TGD_CORA_PROB_NN_BRIDGE = {
-    "name": "cora_prob_nn_citation",
-    "head": {
-        "nodes": {
-            "P": {"in": [3]},  # Probabilistic Methods
-            "N": {"in": [2]},  # Neural Networks
-            "C": {"in": [2, 3]},  # Bridge paper (NN or Prob)
-        },
-        "edges": [("P", "C"), ("N", "C")],  # Both cite C (co-citation)
-        "distinct": ["P", "N", "C"]
-    },
-    "body": {
+    "name": "cora_type_bridge_3_2",
+    "consequent": {
         "nodes": {
             "P": {"in": [3]},
             "N": {"in": [2]},
             "C": {"in": [2, 3]},
         },
-        "edges": [("P", "N")],  # Then P cites N (cross-field citation)
+        "edges": [("P", "C"), ("N", "C")],
+        "distinct": ["P", "N", "C"]
+    },
+    "antecedent": {
+        "nodes": {
+            "P": {"in": [3]},
+            "N": {"in": [2]},
+            "C": {"in": [2, 3]},
+        },
+        "edges": [("P", "N")],
         "distinct": ["P", "N", "C"]
     }
 }
 
-# TGD 5: Genetic Algorithms ↔ Rule Learning
-# If GA and RL papers both cite a bridge paper, they're related (symbolic approaches)
+# TGD 5: bridge closure over pseudo-types 1 and 5
 TGD_CORA_GA_RULE_BRIDGE = {
-    "name": "cora_ga_rule_citation",
-    "head": {
-        "nodes": {
-            "G": {"in": [1]},  # Genetic Algorithms
-            "R": {"in": [5]},  # Rule Learning
-            "C": {"in": [1, 5]},  # Bridge paper (GA or Rule)
-        },
-        "edges": [("G", "C"), ("R", "C")],  # Both cite C (co-citation)
-        "distinct": ["G", "R", "C"]
-    },
-    "body": {
+    "name": "cora_type_bridge_1_5",
+    "consequent": {
         "nodes": {
             "G": {"in": [1]},
             "R": {"in": [5]},
             "C": {"in": [1, 5]},
         },
-        "edges": [("G", "R")],  # Then G cites R (cross-field citation)
+        "edges": [("G", "C"), ("R", "C")],
+        "distinct": ["G", "R", "C"]
+    },
+    "antecedent": {
+        "nodes": {
+            "G": {"in": [1]},
+            "R": {"in": [5]},
+            "C": {"in": [1, 5]},
+        },
+        "edges": [("G", "R")],
         "distinct": ["G", "R", "C"]
     }
 }
 
-# Validate and register Cora constraints
+# Cora now relies on mined constraints only. The previous static pool used
+# multi-edge consequents and is intentionally disabled.
 CONSTRAINTS_CORA: List[TGD] = []
-validate_tgd(TGD_CORA_CITATION_TRIANGLE)
-CONSTRAINTS_CORA.append(TGD_CORA_CITATION_TRIANGLE)
-validate_tgd(TGD_CORA_NN_RL_BRIDGE)
-CONSTRAINTS_CORA.append(TGD_CORA_NN_RL_BRIDGE)
-validate_tgd(TGD_CORA_THEORY_HUB)
-CONSTRAINTS_CORA.append(TGD_CORA_THEORY_HUB)
-validate_tgd(TGD_CORA_PROB_NN_BRIDGE)
-CONSTRAINTS_CORA.append(TGD_CORA_PROB_NN_BRIDGE)
-validate_tgd(TGD_CORA_GA_RULE_BRIDGE)
-CONSTRAINTS_CORA.append(TGD_CORA_GA_RULE_BRIDGE)
+
+
+# ----------------------------------------------------------------------
+# Constraints for DBLP
+# ----------------------------------------------------------------------
+# DBLP now relies on mined constraints only. The previous static pool used
+# non-observed synthetic relations and is intentionally disabled.
+
+CONSTRAINTS_DBLP: List[TGD] = []
 
 
 # ----------------------------------------------------------------------
@@ -704,15 +700,15 @@ CONSTRAINTS_CORA.append(TGD_CORA_GA_RULE_BRIDGE)
 #   NO direct connection between middle and bottom!
 #
 # Design goal: Explain why a node plays certain role
-# Constraints: HEAD (condition) → BODY (consequence)
-# Start with SIMPLE patterns that are easy to match!
+# Constraints follow the standard form φ = (P, c)
+# Start with simple patterns that are easy to match.
 
-# TGD 1: Two tops connect → they should connect to a bottom
-# HEAD: If two tops A,B are connected
-# BODY: Then there should be a bottom E that connects both A and B
+# TGD 1: Two tops connect -> antecedent requires a shared bottom
+# Consequent: two tops A,B are connected
+# Antecedent: there should be a bottom E that connects both A and B
 TGD_BASHAPE_TOP_PAIR_TO_BOTTOM = {
     "name": "bashape_top_pair_to_bottom",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": [1]},  # top 1
             "B": {"in": [1]},  # top 2
@@ -720,7 +716,7 @@ TGD_BASHAPE_TOP_PAIR_TO_BOTTOM = {
         "edges": [("A", "B")],  # two tops connected
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": [1]},
             "B": {"in": [1]},
@@ -731,12 +727,12 @@ TGD_BASHAPE_TOP_PAIR_TO_BOTTOM = {
     }
 }
 
-# TGD 2: Two tops connect → they should each connect to a middle, and middles connect
-# HEAD: If two tops A,B are connected  
-# BODY: Then there should be middles C,D where A-C, B-D, and C-D
+# TGD 2: Two tops connect -> antecedent requires two middles plus their link
+# Consequent: two tops A,B are connected
+# Antecedent: there should be middles C,D where A-C, B-D, and C-D
 TGD_BASHAPE_TOP_PAIR_TO_MIDDLES = {
     "name": "bashape_top_pair_to_middles",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": [1]},  # top 1
             "B": {"in": [1]},  # top 2
@@ -744,7 +740,7 @@ TGD_BASHAPE_TOP_PAIR_TO_MIDDLES = {
         "edges": [("A", "B")],  # two tops connected
         "distinct": ["A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": [1]},
             "B": {"in": [1]},
@@ -756,12 +752,12 @@ TGD_BASHAPE_TOP_PAIR_TO_MIDDLES = {
     }
 }
 
-# TGD 3: Top connects middle and bottom → another top should exist
-# HEAD: If top A connects middle C and bottom E
-# BODY: Then there should be another top B that connects A, C, and E
+# TGD 3: Top connects middle and bottom -> antecedent requires another top
+# Consequent: top A connects middle C and bottom E
+# Antecedent: there should be another top B that connects A, C, and E
 TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE = {
     "name": "bashape_top_middle_bottom_closure",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": [1]},  # top
             "C": {"in": [2]},  # middle
@@ -770,7 +766,7 @@ TGD_BASHAPE_TOP_MIDDLE_BOTTOM_CLOSURE = {
         "edges": [("A", "C"), ("A", "E")],  # top connects middle and bottom
         "distinct": ["A", "C", "E"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": [1]},
             "B": {"in": [1]},  # another top
@@ -828,7 +824,7 @@ CS_OTHER_LABELS = list(range(150, 172))  # Other CS areas
 # then A and B likely cite each other
 TGD_OGBN_COCITATION_SAME_FIELD = {
     "name": "ogbn_cocitation_same_field",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Any major CS field
             "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Same field
@@ -837,7 +833,7 @@ TGD_OGBN_COCITATION_SAME_FIELD = {
         "edges": [("A", "C"), ("B", "C")],  # Co-citation pattern
         "distinct": ["A", "B", "C"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
             "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
@@ -851,7 +847,7 @@ TGD_OGBN_COCITATION_SAME_FIELD = {
 # If AI/ML paper and CV paper both cite a bridge paper, they're related
 TGD_OGBN_AI_CV_BRIDGE = {
     "name": "ogbn_ai_cv_bridge",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS},    # AI/ML paper
             "B": {"in": CS_CV_LABELS},       # CV paper
@@ -860,7 +856,7 @@ TGD_OGBN_AI_CV_BRIDGE = {
         "edges": [("A", "C"), ("B", "C")],  # Both cite C
         "distinct": ["A", "B", "C"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS},
             "B": {"in": CS_CV_LABELS},
@@ -874,7 +870,7 @@ TGD_OGBN_AI_CV_BRIDGE = {
 # If AI/ML paper and NLP paper both cite a bridge paper, they're related
 TGD_OGBN_AI_NLP_BRIDGE = {
     "name": "ogbn_ai_nlp_bridge",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS},    # AI/ML paper
             "B": {"in": CS_NLP_LABELS},      # NLP paper
@@ -883,7 +879,7 @@ TGD_OGBN_AI_NLP_BRIDGE = {
         "edges": [("A", "C"), ("B", "C")],  # Both cite C
         "distinct": ["A", "B", "C"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS},
             "B": {"in": CS_NLP_LABELS},
@@ -897,7 +893,7 @@ TGD_OGBN_AI_NLP_BRIDGE = {
 # If two applied papers both cite a Theory paper, they're related
 TGD_OGBN_THEORY_HUB = {
     "name": "ogbn_theory_hub",
-    "head": {
+    "consequent": {
         "nodes": {
             "T": {"in": CS_THEORY_LABELS},   # Theory paper (hub)
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 1
@@ -906,7 +902,7 @@ TGD_OGBN_THEORY_HUB = {
         "edges": [("A", "T"), ("B", "T")],  # Both cite Theory
         "distinct": ["T", "A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
             "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
@@ -920,7 +916,7 @@ TGD_OGBN_THEORY_HUB = {
 # If two applied papers both cite a Systems paper, they're related
 TGD_OGBN_SYSTEMS_HUB = {
     "name": "ogbn_systems_hub",
-    "head": {
+    "consequent": {
         "nodes": {
             "S": {"in": CS_SYSTEMS_LABELS},  # Systems paper (hub)
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},  # Applied paper 1
@@ -929,7 +925,7 @@ TGD_OGBN_SYSTEMS_HUB = {
         "edges": [("A", "S"), ("B", "S")],  # Both cite Systems
         "distinct": ["S", "A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
             "B": {"in": CS_AI_ML_LABELS + CS_CV_LABELS + CS_NLP_LABELS},
@@ -984,7 +980,7 @@ CONSTRAINTS_OGBN_PAPERS.append(TGD_OGBN_SYSTEMS_HUB)  # Duplicate 5
 # then B and C are related
 TGD_TREECYCLE_PARENT_CHILD = {
     "name": "treecycle_parent_child",
-    "head": {
+    "consequent": {
         "nodes": {
             "P1": {"in": [0, 1, 2, 3, 4]},  # Parent 1
             "P2": {"in": [0, 1, 2, 3, 4]},  # Parent 2 (same type)
@@ -994,7 +990,7 @@ TGD_TREECYCLE_PARENT_CHILD = {
         "edges": [("P1", "C1"), ("P2", "C2")],  # Parent-child edges
         "distinct": ["P1", "P2", "C1", "C2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "C1": {"in": [0, 1, 2, 3, 4]},
             "C2": {"in": [0, 1, 2, 3, 4]},
@@ -1008,7 +1004,7 @@ TGD_TREECYCLE_PARENT_CHILD = {
 # If A connects to B and B connects to C (in a cycle), then A and C are related
 TGD_TREECYCLE_TRANSITIVITY = {
     "name": "treecycle_transitivity",
-    "head": {
+    "consequent": {
         "nodes": {
             "A": {"in": [0, 1, 2, 3, 4]},
             "B": {"in": [0, 1, 2, 3, 4]},
@@ -1017,7 +1013,7 @@ TGD_TREECYCLE_TRANSITIVITY = {
         "edges": [("A", "B"), ("B", "C")],  # A→B→C
         "distinct": ["A", "B", "C"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": [0, 1, 2, 3, 4]},
             "C": {"in": [0, 1, 2, 3, 4]},
@@ -1031,7 +1027,7 @@ TGD_TREECYCLE_TRANSITIVITY = {
 # If nodes of type 0 (hub type) connect to two different nodes, those nodes are related
 TGD_TREECYCLE_HUB = {
     "name": "treecycle_hub",
-    "head": {
+    "consequent": {
         "nodes": {
             "H": {"in": [0]},  # Hub node (type 0)
             "A": {"in": [1, 2, 3, 4]},  # Connected node A
@@ -1040,7 +1036,7 @@ TGD_TREECYCLE_HUB = {
         "edges": [("H", "A"), ("H", "B")],  # Hub connects both
         "distinct": ["H", "A", "B"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "A": {"in": [1, 2, 3, 4]},
             "B": {"in": [1, 2, 3, 4]},
@@ -1055,7 +1051,7 @@ TGD_TREECYCLE_HUB = {
 # then grandparent and child are related (skip-level)
 TGD_TREECYCLE_CROSS_LAYER = {
     "name": "treecycle_cross_layer",
-    "head": {
+    "consequent": {
         "nodes": {
             "GP": {"in": [0, 1, 2, 3, 4]},  # Grandparent
             "P": {"in": [0, 1, 2, 3, 4]},   # Parent
@@ -1064,7 +1060,7 @@ TGD_TREECYCLE_CROSS_LAYER = {
         "edges": [("GP", "P"), ("P", "C")],  # GP→P→C
         "distinct": ["GP", "P", "C"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "GP": {"in": [0, 1, 2, 3, 4]},
             "C": {"in": [0, 1, 2, 3, 4]},
@@ -1078,7 +1074,7 @@ TGD_TREECYCLE_CROSS_LAYER = {
 # If two nodes share the same parent, they are siblings (related)
 TGD_TREECYCLE_SIBLING = {
     "name": "treecycle_sibling",
-    "head": {
+    "consequent": {
         "nodes": {
             "P": {"in": [0, 1, 2, 3, 4]},   # Parent
             "S1": {"in": [0, 1, 2, 3, 4]},  # Sibling 1
@@ -1087,7 +1083,7 @@ TGD_TREECYCLE_SIBLING = {
         "edges": [("P", "S1"), ("P", "S2")],  # Parent connects both
         "distinct": ["P", "S1", "S2"]
     },
-    "body": {
+    "antecedent": {
         "nodes": {
             "S1": {"in": [0, 1, 2, 3, 4]},
             "S2": {"in": [0, 1, 2, 3, 4]},
@@ -1116,6 +1112,7 @@ _REGISTRY: Dict[str, List[TGD]] = {
     'MUTAG': CONSTRAINTS_MUTAG,
     'YELP': CONSTRAINTS_YELP,
     'CORA': CONSTRAINTS_CORA,
+    'DBLP': CONSTRAINTS_DBLP,
     'BASHAPE': CONSTRAINTS_BASHAPE,
     'OGBN-PAPERS100M': CONSTRAINTS_OGBN_PAPERS,
     'OGBN_PAPERS100M': CONSTRAINTS_OGBN_PAPERS,  # Alternative key
@@ -1142,6 +1139,7 @@ __all__ = [
     'CONSTRAINTS_MUTAG',
     'CONSTRAINTS_YELP',
     'CONSTRAINTS_CORA',
+    'CONSTRAINTS_DBLP',
     'CONSTRAINTS_BASHAPE',
     'CONSTRAINTS_OGBN_PAPERS',
     'get_constraints',

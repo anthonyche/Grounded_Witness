@@ -1,87 +1,61 @@
+from __future__ import annotations
 
+"""
+Constraint-driven edge masking used to build a single observed graph per workload.
 
-"""Constraint-driven edge masking for triggering backchase on MUTAG (and similar graphs).
-
-设计目标：
-- 优先删除 **TGD head** 中的一条边，使得 head 仍可被部分匹配、而 body 需要通过 backchase 修复；
-- 避免纯随机删边（随机仅用于在可选候选中打破平 ties）。
-
-依赖：
-- matcher.py: 提供 `find_head_matches(data, tgd)`，返回匹配到的变量绑定列表（List[Dict[str,int]]）。
-- constraints.py: TGD 结构为 {"name", "head": {nodes, edges, distinct}, "body": {...}}，其中
-  nodes: Dict[var_name, {"in": [label_ids]}], edges: List[Tuple[str,str]]，distinct: List[str]
-
-本文件提供：
-- mask_edges_by_constraints(data, constraints, max_masks=1, mask_ratio=None, seed=None):
-    给定一个 PyG Data（单图或L-hop子图）、TGD 列表，优先从 head 匹配里的边中挑选、并在 edge_index 中删除对应无向边（两条反向有向边）。
-    返回 (new_data, dropped_edges)，其中 dropped_edges 为 [(u,v), ...] 无向端点对。
-
-注意：
-- MUTAG 是无向图，但在 PyG 中通常用双向有向边表示。我们按"无向对"来去重与删除。
-- 如果某些 TGD 没有 head 匹配，函数会回退为空操作（不删边）。
+Standard backchase semantics:
+  - each constraint is φ = (P, c)
+  - masking must preserve consequent matches for c
+  - masking preferentially removes already bound edges from P (antecedent),
+    so backchase has to recover P from the same node set
 """
 
-from __future__ import annotations
-from typing import List, Tuple, Dict, Any, Set
+from typing import Any, Dict, List, Set, Tuple
 import random
+
 import torch
 from torch_geometric.data import Data
 
-# 依赖我们自己实现的匹配器
 try:
-    from src.matcher import find_head_matches  # type: ignore
-except Exception:  # 允许相对导入
-    from matcher import find_head_matches  # type: ignore
+    from src.matcher import find_pattern_matches  # type: ignore
+except Exception:
+    from matcher import find_pattern_matches  # type: ignore
 
-# 连通性检查工具
 try:
     from src.connectivity_utils import select_edges_preserving_connectivity  # type: ignore
 except Exception:
     from connectivity_utils import select_edges_preserving_connectivity  # type: ignore
 
-# 依赖常量（可选，不强耦合）：
 try:
-    from src.constraints import TGD  # Typed alias（如果在 constraints.py 定义了）
-except Exception:  # 兼容未定义 Typed alias 的情况
+    from src.constraints import TGD  # type: ignore
+except Exception:
     TGD = Dict[str, Any]
 
 
-# ------------------------------
-# 工具函数
-# ------------------------------
-
 def _as_undirected(u: int, v: int) -> Tuple[int, int]:
-    """把边端点规范化为无向对 (min,max)。"""
     return (u, v) if u <= v else (v, u)
 
 
 def _build_edge_bucket(edge_index: torch.Tensor) -> Dict[Tuple[int, int], List[int]]:
-    """为快速删除构建映射：无向对 -> 在 edge_index 中的列索引列表。
-    假设 edge_index 形状 [2, E]。
-    """
     bucket: Dict[Tuple[int, int], List[int]] = {}
     src, dst = edge_index[0], edge_index[1]
-    for eid in range(edge_index.size(1)):
-        key = _as_undirected(int(src[eid]), int(dst[eid]))
-        bucket.setdefault(key, []).append(eid)
+    for edge_id in range(edge_index.size(1)):
+        key = _as_undirected(int(src[edge_id]), int(dst[edge_id]))
+        bucket.setdefault(key, []).append(edge_id)
     return bucket
 
 
-def _drop_edges(edge_index: torch.Tensor, drop_keys: Set[Tuple[int, int]]) -> torch.Tensor:
-    """根据无向键集合 `drop_keys` 从 edge_index 中移除对应列（两向）。"""
-    if len(drop_keys) == 0:
-        return edge_index
+def _drop_edges(edge_index: torch.Tensor, drop_keys: Set[Tuple[int, int]]) -> Tuple[torch.Tensor, torch.Tensor]:
+    if not drop_keys:
+        keep_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
+        return edge_index, keep_mask
     bucket = _build_edge_bucket(edge_index)
     keep_mask = torch.ones(edge_index.size(1), dtype=torch.bool)
     for key in drop_keys:
-        for eid in bucket.get(key, []):
-            keep_mask[eid] = False
-    return edge_index[:, keep_mask]
+        for edge_id in bucket.get(key, []):
+            keep_mask[edge_id] = False
+    return edge_index[:, keep_mask], keep_mask
 
-
-# ------------------------------
-# 主功能：基于约束（TGD）进行掩蔽
-# ------------------------------
 
 def mask_edges_by_constraints(
     data: Data,
@@ -89,108 +63,89 @@ def mask_edges_by_constraints(
     max_masks: int = 1,
     mask_ratio: float | None = None,
     seed: int | None = None,
-    prefer_longer_heads: bool = True,
+    prefer_larger_antecedents: bool = True,
     preserve_connectivity: bool = True,
 ) -> Tuple[Data, List[Tuple[int, int]]]:
-    """优先从各 TGD 的 head 匹配中，选取若干无向边进行删除，以便触发 backchase。
-
-    参数：
-        data: PyG 的 Data（单图或L-hop子图）。要求包含 x, edge_index（无向图通常用双向有向边表示）。
-        constraints: TGD 列表（来自 constraints.py）。
-        max_masks: 最多删除多少条"无向边"（默认 1）。如果指定了 mask_ratio，则此参数被忽略。
-        mask_ratio: 删除边的比例 (0.0-1.0)，例如 0.1 表示删除当前图 10% 的边。如果指定，会覆盖 max_masks。
-        seed: 随机种子（用于在候选中打破平局），None 表示不固定。
-        prefer_longer_heads: 若为 True，则优先从 head 较长（边数更多）的约束里挑边（更容易形成"部分可见"→"需要修复"的情形）。
-        preserve_connectivity: 若为 True，则只删除不会导致图不连通的边（即非桥边）。
-
-    返回：
-        (new_data, dropped_edges)
-        new_data: 拷贝后的 Data，其中 edge_index 已删除对应边。
-        dropped_edges: 被删除的无向端点列表 [(u,v), ...]（u<v）。
+    """
+    Build an observed graph by removing edges from already bound portions of P
+    while preserving consequent-side matches for c.
     """
     if seed is not None:
         random.seed(seed)
-    
-    # 如果指定了 mask_ratio，计算实际要删除的边数
+
     if mask_ratio is not None:
-        # 计算图中无向边总数（edge_index是有向的，除以2得到无向边数）
         total_undirected_edges = data.edge_index.size(1) // 2
-        # 特殊处理: mask_ratio=0.0 时不删除任何边
         if mask_ratio == 0.0:
             max_masks = 0
         else:
             max_masks = max(1, int(total_undirected_edges * mask_ratio))
-        print(f"[mask_edges_by_constraints] Using mask_ratio={mask_ratio:.2f}: "
-              f"total_edges={total_undirected_edges}, will_mask={max_masks}")
-    
-    # 如果 max_masks=0，直接返回原图
+
     if max_masks == 0:
         return data, []
 
-    # 收集所有候选 head 边（经由匹配得到变量绑定，再把变量名映射到实际节点 ID，最后把 head.edges 投影为实际边）。
-    candidate_keys: List[Tuple[int, int]] = []  # 无向边键集合（带重复，后续去重与打分）
-    weighted_pool: List[Tuple[Tuple[int, int], int]] = []  # (无向对, 权重/优先级)
+    weighted_pool: List[Tuple[Tuple[int, int], int]] = []
 
-    for tgd in constraints:
-        head = tgd.get("head", {})
-        head_edges = head.get("edges", [])
-        if not head_edges:
+    for constraint in constraints:
+        consequent = constraint.get("consequent", {})
+        antecedent = constraint.get("antecedent", {})
+        consequent_edges = list(consequent.get("edges", []))
+        antecedent_edges = list(antecedent.get("edges", []))
+        if not consequent_edges or not antecedent_edges:
             continue
 
-        # 计算优先级：边数越多优先级越高（可调）
-        priority = len(head_edges) if prefer_longer_heads else 1
-
-        # 通过匹配器拿到所有 head 的变量绑定 match（dict: var -> node_id）
+        priority = len(antecedent_edges) if prefer_larger_antecedents else 1
         try:
-            matches = find_head_matches(data, tgd)
+            consequent_matches = find_pattern_matches(data, consequent)
         except Exception:
-            matches = []
+            consequent_matches = []
 
-        for bind in matches:
-            for (va, vb) in head_edges:
-                if va not in bind or vb not in bind:
+        for binding in consequent_matches:
+            for edge_spec in antecedent_edges:
+                u_var, v_var = edge_spec[0], edge_spec[1]
+                if u_var not in binding or v_var not in binding:
                     continue
-                u, v = int(bind[va]), int(bind[vb])
-                key = _as_undirected(u, v)
-                candidate_keys.append(key)
-                weighted_pool.append((key, priority))
+                u = int(binding[u_var])
+                v = int(binding[v_var])
+                weighted_pool.append((_as_undirected(u, v), priority))
 
-    if not candidate_keys:
-        # 没匹配到任何 head，直接返回原图
+    if not weighted_pool:
         return data, []
 
-    # 去重，并根据权重进行一个简单的加权抽样/排序优先选择
-    # 策略：按 (priority, 随机噪声) 排序，选前 max_masks 个
-    uniq: Dict[Tuple[int, int], int] = {}
-    for key, pr in weighted_pool:
-        # 记录该 key 的最大 priority（同一无向边可能来自多个 TGD）
-        if key not in uniq or pr > uniq[key]:
-            uniq[key] = pr
+    unique_priorities: Dict[Tuple[int, int], int] = {}
+    for key, priority in weighted_pool:
+        if key not in unique_priorities or priority > unique_priorities[key]:
+            unique_priorities[key] = priority
 
-    ranked = sorted(uniq.items(), key=lambda kv: (kv[1], random.random()), reverse=True)
-    
-    # 如果需要保持连通性，使用增量选择策略
+    ranked = sorted(unique_priorities.items(), key=lambda kv: (kv[1], random.random()), reverse=True)
+
     if preserve_connectivity:
-        num_nodes = int(data.x.size(0) if hasattr(data, 'x') and data.x is not None else 
-                       data.num_nodes if hasattr(data, 'num_nodes') else 
-                       data.edge_index.max().item() + 1)
-        
-        # 使用增量选择：逐条检查删除后是否仍连通
-        to_drop: List[Tuple[int, int]] = select_edges_preserving_connectivity(
-            data.edge_index, num_nodes, ranked, max_masks, verbose=True
+        if hasattr(data, "x") and data.x is not None:
+            num_nodes = int(data.x.size(0))
+        elif hasattr(data, "num_nodes") and data.num_nodes is not None:
+            num_nodes = int(data.num_nodes)
+        else:
+            num_nodes = int(data.edge_index.max().item() + 1)
+        to_drop = select_edges_preserving_connectivity(
+            data.edge_index,
+            num_nodes,
+            ranked,
+            max_masks,
+            verbose=True,
         )
     else:
-        to_drop: List[Tuple[int, int]] = [kv[0] for kv in ranked[:max_masks]]
+        to_drop = [item[0] for item in ranked[:max_masks]]
 
-    # 实际从 edge_index 删除对应的无向边（两向）
-    new_edge_index = _drop_edges(data.edge_index, set(to_drop))
-
-    # 返回新的 Data（浅拷贝 x/batch 等，深拷 edge_index）
+    new_edge_index, keep_mask = _drop_edges(data.edge_index, set(to_drop))
     new_data = Data(x=data.x, edge_index=new_edge_index)
-    for attr in ("y", "batch"):  # 复制常用字段（若存在）
+    for attr in ("y", "batch"):
         if hasattr(data, attr):
             setattr(new_data, attr, getattr(data, attr))
-
+    if hasattr(data, "edge_rel_type") and getattr(data, "edge_rel_type") is not None:
+        new_data.edge_rel_type = data.edge_rel_type[keep_mask]
+    if hasattr(data, "y_type") and getattr(data, "y_type") is not None:
+        new_data.y_type = data.y_type
+    if hasattr(data, "node_labels") and getattr(data, "node_labels") is not None:
+        new_data.node_labels = data.node_labels
     return new_data, to_drop
 
 
@@ -202,76 +157,45 @@ def mask_edges_for_node_classification(
     max_masks: int = 1,
     mask_ratio: float | None = None,
     seed: int | None = None,
-    prefer_longer_heads: bool = True,
+    prefer_larger_antecedents: bool = True,
     preserve_connectivity: bool = True,
 ) -> Tuple[Data, List[Tuple[int, int]], torch.Tensor]:
-    """
-    Extract L-hop subgraph around target node and apply constraint-based edge masking.
-    
-    Args:
-        data: Full graph Data (node classification)
-        target_node: Node index to explain
-        constraints: TGD list
-        num_hops: L-hop neighborhood size
-        max_masks: Max edges to remove (ignored if mask_ratio is specified)
-        mask_ratio: Ratio of edges to remove from L-hop subgraph (0.0-1.0), e.g., 0.1 = 10%
-        seed: Random seed
-        prefer_longer_heads: Prioritize longer HEAD patterns
-        preserve_connectivity: Only remove non-bridge edges
-        
-    Returns:
-        (masked_subgraph, dropped_edges, node_subset)
-        masked_subgraph: L-hop subgraph with edges masked
-        dropped_edges: List of dropped edge pairs (in subgraph IDs)
-        node_subset: Original node IDs in the subgraph
-    """
     from torch_geometric.utils import k_hop_subgraph
-    
-    # Step 1: Extract L-hop subgraph
+
     node_subset, edge_index_sub, mapping, edge_mask = k_hop_subgraph(
         node_idx=target_node,
         num_hops=num_hops,
         edge_index=data.edge_index,
         relabel_nodes=True,
-        num_nodes=data.num_nodes,
     )
-    
-    # Step 2: Build subgraph Data object
-    x_sub = data.x[node_subset]
-    y_sub = data.y[node_subset] if hasattr(data, 'y') and data.y is not None else None
-    
-    # Find target node's new ID in the subgraph
-    # node_subset contains original node IDs, we need to find where target_node appears
-    target_node_subgraph_id = (node_subset == target_node).nonzero(as_tuple=True)[0].item()
-    
-    subgraph = Data(x=x_sub, edge_index=edge_index_sub)
-    if y_sub is not None:
-        subgraph.y = y_sub
-    subgraph.num_nodes = int(node_subset.numel())
-    subgraph.original_node_ids = node_subset
-    subgraph.target_node_subgraph_id = target_node_subgraph_id
-    subgraph.target_node_original_id = target_node
-    
-    # Step 3: Apply constraint-based masking on the subgraph
+
+    subgraph = Data(
+        x=data.x[node_subset],
+        edge_index=edge_index_sub,
+        num_nodes=int(node_subset.numel()),
+    )
+    if hasattr(data, "y"):
+        subgraph.y = data.y[node_subset]
+    if hasattr(data, "y_type") and data.y_type is not None:
+        subgraph.y_type = data.y_type[node_subset]
+    if hasattr(data, "node_labels") and data.node_labels is not None:
+        subgraph.node_labels = data.node_labels[node_subset]
+    if hasattr(data, "edge_rel_type") and data.edge_rel_type is not None:
+        subgraph.edge_rel_type = data.edge_rel_type[edge_mask]
+    if hasattr(data, "batch"):
+        subgraph.batch = torch.zeros(subgraph.num_nodes, dtype=torch.long)
+
     masked_subgraph, dropped_edges = mask_edges_by_constraints(
         subgraph,
         constraints,
         max_masks=max_masks,
         mask_ratio=mask_ratio,
         seed=seed,
-        prefer_longer_heads=prefer_longer_heads,
+        prefer_larger_antecedents=prefer_larger_antecedents,
         preserve_connectivity=preserve_connectivity,
     )
-    
-    # Copy over metadata
-    masked_subgraph.original_node_ids = node_subset
-    masked_subgraph.target_node_subgraph_id = subgraph.target_node_subgraph_id
-    masked_subgraph.target_node_original_id = target_node
-    
+    masked_subgraph.target_node_subgraph_id = int(mapping.item())
+    masked_subgraph._nodes_in_full = node_subset.clone()
+    masked_subgraph._nodes_in_observed = torch.arange(int(node_subset.numel()))
+    masked_subgraph.task = "node"
     return masked_subgraph, dropped_edges, node_subset
-
-
-__all__ = [
-    "mask_edges_by_constraints",
-    "mask_edges_for_node_classification",
-]

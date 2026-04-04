@@ -1,102 +1,145 @@
-# exp_name: pgexplainer_mutag
-# exp_name: gnnexplainer_mutag
-exp_name: heuchase_ogbn
-# exp_name: heuchase_mutag
-# exp_name: pgexplainer_bashape
+# 手动实验入口模板
+# 用法：
+#   python scripts/run_experiment_bundle.py --config config.yaml
+#
+# 这份文件现在是“统一实验入口”的默认手动模板。
+# 如果你要跨多次运行保持完全同一套 workload，不要只改 target_ratio；
+# 请显式设置 target_nodes / graph_positions。
+
+run_name: manual_dblp
+dataset: dblp
+model_name: gcn2
+methods:
+  - ApxC
+  - HeuC
+  - Exh
+  - GEX
+  - PGX
+
+# factor 为空时，只跑一个默认点。
+# 例如：
+# factor_name: sigma_size
+# factor_values: [10, 20, 30, 40, 50]
+factor_name: ""
+factor_values: []
+
+output_root: outputs/raw/bundles
+reuse_observed_graph_cache: true
+
+# ===== 主链默认参数 =====
 random_seed: 42
+sigma_size: 20
+local_budget_k: 2
+L: 2
+gamma: 1.0
+alpha: 0.5
+beta: 0.5
+incompleteness: 0.05
+target_ratio: 0.01
 
-# ---- Experiment hyperparameters ----
-L: 2             # hop / num GNN layers (2-hop for BAShape to capture house structure)
-k: 6      # window size (increased for more diversity in case study)
-Budget: 8        # repair budget (1,2,4,6,8) - increased to allow backchase completion
-alpha: 0.2      # conciseness weight (slightly reduced)
-beta: 0.2       # repair penalty weight (increased to reward clean explanations)
-gamma: 0.6       # coverage weight (kept dominant for diversity)
-max_masks : 3    # (DEPRECATED) Use mask_ratio instead for node classification
-mask_ratio: 0.05  # Ratio of edges to mask in L-hop subgraph (0.0-1.0), e.g., 0.15 = 15%
-preserve_connectivity: true  # Only mask non-bridge edges to keep graph connected
-heuchase_m: 20  # num of candidates for heuchase
-heuchase_noise_std: 0.2  # noise level for Edmonds sampling (higher = more diversity)
+# ===== workload 固定策略 =====
+# 推荐：
+# 1. 手动实验优先用显式 target_nodes / graph_positions，避免跨次运行重采样。
+# 2. 若留空，则 bundle 会按当前 config 采样一次 workload，并在同一次 bundle 中让所有方法共享。
 
-# ---- GNN Model ----
-# model_name: "gcn_graph_3" # gat_graph, gcn_graph, change along with L gat_yelp, gcn_yelp_3, sage_yelp, gcn_yelp_1, gcn_yelp_2
-hidden_dim: 16  # BAShape,OGBN_100M model was trained with hidden_dim=16
-#gat_graph_3, gcn_graph_1, gcn_graph_2, gcn_graph_3, sage_graph_3
-model_name: "gcn2" 
-# hidden_dim: 32 #默认32， BAShape是用的16
-# ---- Data ----
-# data_name: "MUTAG"
-# data_size: 188          # total number of graphs
-# input_dim: 7
-# output_dim: 2
-# batch_size: 32
-# train_ratio: 0.8
-# val_ratio: 0.1
-# test_ratio: 0.1
-# num_test: 0
+# DBLP: 固定 30 个 regression workloads
+target_nodes:
+  - 52
+  - 117
+  - 399
+  - 624
+  - 784
+  - 1000
+  - 1101
+  - 1162
+  - 1262
+  - 1283
+  - 1535
+  - 1600
+  - 1689
+  - 1780
+  - 1785
+  - 1819
+  - 2063
+  - 2114
+  - 2125
+  - 2182
+  - 2364
+  - 2475
+  - 2587
+  - 2676
+  - 2683
+  - 2708
+  - 3301
+  - 3399
+  - 3616
+  - 3937
 
-# data_name: "Yelp"
-# data_size: 716847
-# num_edges: 13954819
-# input_dim: 300
-# output_dim: 100
-# num_test: 143370  # 20% of nodes for testing
-# batch_size: 128
-# target_nodes: [0,1,2,3,4,5,6,7,8,9,
-#        10,11,12,13,14,15,16,17,18,19,
-#        20,21,22,23,24,25,26,27,28,29,
-#        30,31,32,33,34,35,36,37,38,39,
-#        40,41,42,43,44,45,46,47,48,49,
-#        50,51,52,53,54,55,56,57,58,59,
-#        60,61,62,63,64,65,66,67,68,69,
-#        70,71,72,73,74,75,76,77,78,79,
-#        80,81,82,83,84,85,86,87,88,89,
-#        90,91,92,93,
-#        94,95,96,97,98,99] # set of target nodes to be explained
+# Cora 示例：改成 dataset: cora 后，可切换到下面这组固定 target_nodes
+# target_nodes:
+#   - 61
+#   - 1879
+#   - 570
+#   - 2039
+#   - 2668
+#   - 2382
+#   - 1283
+#   - 736
+#   - 1681
+#   - 2082
+#   - 9
+#   - 1311
+#   - 814
+#   - 2281
+#   - 1097
+#   - 242
+#   - 1133
+#   - 1394
+#   - 2013
+#   - 794
+#   - 2430
+#   - 1331
+#   - 6
+#   - 1581
+#   - 185
+#   - 1815
 
+# MUTAG 示例：改成 dataset: mutag 后，用 graph_positions 固定 graph workloads
+# graph_positions:
+#   - 0
+#   - 1
+#   - 2
+#   - 3
+#   - 4
+#   - 5
+#   - 6
+#   - 7
+#   - 8
+#   - 9
+#   - 10
+#   - 11
+#   - 12
+#   - 13
+#   - 14
+#   - 15
+#   - 16
+#   - 17
+#   - 18
 
-data_name: "ogbn-papers100M"
-data_size: 111059956      # 111M nodes
-num_edges: 1615685872     # 1.6B edges
-input_dim: 128            # Node feature dimension
-output_dim: 172           # Number of arXiv subject areas
-num_test: 138949          # Test set size (papers published >= 2019)
+# ===== 可选覆盖项 =====
+# 这些字段会直接覆盖 dataset/default config
+constraint_source: mined
+constraint_rule_mode: standard_backchase
+constraint_filter_target_matchability: true
+constraint_pool_mode: balanced
+# 可选：
+#   - original
+#   - balanced
+#   - coverage_only
+# 如需手动指定固定规则名单，可再加：
+# constraint_pool_file: configs/constraint_pools/dblp_balanced_p7_t0p4.yaml
+preserve_connectivity: true
+max_masks: 1
 
-# data_name: "Cora"
-# data_size: 2708
-# num_test: 541  # Standard Cora split: ~20% test (was 1, causing 0% accuracy)
-# input_dim: 1433
-# output_dim: 7
-# target_nodes: [61,  1879, 570, 2039, 2668, 2382, 1283, 736,  1681, 2082,
-#      9,    1311, 814, 2281, 1097, 242 , 1133, 1394, 2013, 794 , 
-#      2430, 1331, 6  , 1581, 185 , 1815] #1% test nodes to explain
-
-# 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,18,19,20,21,22,23,24,25,26,
-#      27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52
-# # ---- Training ----
-# num_epochs: 200
-# learning_rate: 0.01
-# weight_decay: 0.0005
-
-
-# # # BAShape settings:
-# data_name: "BAShape"
-# data_size: 2020000
-# num_edges: 12055704
-# num_test: 404000  # 20% of nodes for testing
-# input_dim: 1
-# output_dim: 4  # {0: BA base, 1: house top, 2: house middle, 3: house bottom}
-num_target_nodes: 100  # Auto-sample 100 house nodes from test set
-# target_nodes will be automatically sampled from test set house nodes (labels 1,2,3)
-
-# ---- Distributed Benchmark Settings ----
-device: "cuda"              # Device for model inference (cuda/cpu)
-num_workers: [2, 4, 6, 8, 10]  # List of worker counts to test
-num_gpus: 1                 # Number of GPUs to use
-
-# 可选
-graph_index: 2   # 不传 --input 时回退用
-# save_dir: results/MUTAG/heuchase_mutag  # 不传 --output 时回退用
-# save_dir: results/MUTAG/pgexplainer_mutag
-# save_dir: results/MUTAG/apxchase_mutag
-max_enforce_iterations: 50  # Maximum iterations for exhaustive enforcement (reduced for faster testing)
+# 如果想临时限制方法集合，就注释 methods 里的项；
+# 不要在同一 config 里混用 target_nodes 和 graph_positions。

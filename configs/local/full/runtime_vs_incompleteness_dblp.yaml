@@ -1,0 +1,20 @@
+name: full_runtime_vs_incompleteness_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - default
+base:
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+sweep:
+  incompleteness: [0.05, 0.10, 0.15, 0.20]
+

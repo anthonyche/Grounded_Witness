@@ -1,0 +1,21 @@
+name: full_runtime_vs_target_ratio_dblp
+group: paper
+datasets:
+  - dblp
+methods:
+  - apxchase
+  - heuchase
+  - gnnexplainer
+  - pgexplainer
+  - exhaustchase
+model_keys:
+  - default
+base:
+  sigma_size: 20
+  K: 6
+  local_budget_k: 2
+  L: 2
+  incompleteness: 0.05
+sweep:
+  target_ratio: [0.01, 0.02, 0.03, 0.04, 0.05]
+

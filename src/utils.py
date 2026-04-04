@@ -3,8 +3,9 @@ import os
 import numpy as np
 import yaml
 import torch
+import math
 import torch_geometric.transforms as T
-from torch_geometric.datasets import Planetoid, TUDataset, Yelp
+from torch_geometric.datasets import Planetoid, TUDataset, Yelp, DBLP
 from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.datasets import ExplainerDataset
 from torch_geometric.datasets.graph_generator import BAGraph
@@ -12,6 +13,12 @@ from torch_geometric.utils import remove_self_loops
 from torch_geometric.loader import DataLoader
 from torch.utils.data import random_split
 from torch_geometric.transforms import ToUndirected, AddSelfLoops, NormalizeFeatures
+from torch_geometric.data import Data
+
+try:
+    from constraints import DBLP_NODE_TYPE, DBLP_REL_TYPE
+except ImportError:
+    from .constraints import DBLP_NODE_TYPE, DBLP_REL_TYPE
 
 
 def set_seed(seed):
@@ -29,6 +36,146 @@ def load_config(config_file):
     with open(config_file, 'r') as file:
         config = yaml.safe_load(file)
     return config
+
+
+def _project_feature_block(x: torch.Tensor | None, out_dim: int, seed: int, seed_offset: int, num_nodes: int) -> torch.Tensor:
+    if out_dim <= 0:
+        return torch.zeros((num_nodes, 0), dtype=torch.float)
+    if x is None or not isinstance(x, torch.Tensor) or x.numel() == 0:
+        return torch.zeros((num_nodes, out_dim), dtype=torch.float)
+    x = x.detach().cpu().to(torch.float)
+    gen = torch.Generator(device='cpu')
+    gen.manual_seed(int(seed + seed_offset))
+    scale = 1.0 / math.sqrt(max(1, x.size(1)))
+    proj = torch.randn((x.size(1), out_dim), generator=gen, dtype=torch.float) * scale
+    return x @ proj
+
+
+def _build_dblp_homogeneous_view(config: dict, data_dir: str, random_seed: int) -> dict:
+    dataset_root = os.path.join(data_dir, "DBLP")
+    dataset = DBLP(root=dataset_root)
+    hetero = dataset[0]
+
+    node_types = ["author", "paper", "term", "conference"]
+    relation_specs = [
+        ("author", "paper", DBLP_REL_TYPE["author_paper"]),
+        ("paper", "term", DBLP_REL_TYPE["paper_term"]),
+        ("paper", "conference", DBLP_REL_TYPE["paper_conference"]),
+    ]
+    projection_dim = int(config.get("dblp_projection_dim", 128))
+    num_type_dims = len(node_types)
+
+    offsets = {}
+    cursor = 0
+    for node_type in node_types:
+        count = int(hetero[node_type].num_nodes)
+        offsets[node_type] = cursor
+        cursor += count
+
+    feature_parts = []
+    label_parts = []
+    train_parts = []
+    val_parts = []
+    test_parts = []
+    type_parts = []
+
+    for type_idx, node_type in enumerate(node_types):
+        store = hetero[node_type]
+        num_nodes = int(store.num_nodes)
+        projected = _project_feature_block(
+            getattr(store, "x", None),
+            projection_dim,
+            random_seed,
+            type_idx * 9973,
+            num_nodes,
+        )
+        one_hot = torch.zeros((num_nodes, num_type_dims), dtype=torch.float)
+        one_hot[:, type_idx] = 1.0
+        feature_parts.append(torch.cat([projected, one_hot], dim=1))
+
+        type_parts.append(torch.full((num_nodes,), int(DBLP_NODE_TYPE[node_type]), dtype=torch.long))
+        if node_type == "author":
+            label_parts.append(store.y.detach().cpu().to(torch.long))
+            train_parts.append(store.train_mask.detach().cpu().to(torch.bool))
+            val_parts.append(store.val_mask.detach().cpu().to(torch.bool))
+            test_parts.append(store.test_mask.detach().cpu().to(torch.bool))
+        else:
+            label_parts.append(torch.full((num_nodes,), -1, dtype=torch.long))
+            train_parts.append(torch.zeros(num_nodes, dtype=torch.bool))
+            val_parts.append(torch.zeros(num_nodes, dtype=torch.bool))
+            test_parts.append(torch.zeros(num_nodes, dtype=torch.bool))
+
+    edge_blocks = []
+    rel_blocks = []
+    for src_type, dst_type, rel_id in relation_specs:
+        edge_index = hetero[(src_type, "to", dst_type)].edge_index.detach().cpu().to(torch.long)
+        src = edge_index[0] + int(offsets[src_type])
+        dst = edge_index[1] + int(offsets[dst_type])
+        forward = torch.stack([src, dst], dim=0)
+        reverse = torch.stack([dst, src], dim=0)
+        edge_blocks.extend([forward, reverse])
+        rel_blocks.extend([
+            torch.full((forward.size(1),), int(rel_id), dtype=torch.long),
+            torch.full((reverse.size(1),), int(rel_id), dtype=torch.long),
+        ])
+
+    data = Data(
+        x=torch.cat(feature_parts, dim=0),
+        edge_index=torch.cat(edge_blocks, dim=1),
+        y=torch.cat(label_parts, dim=0),
+    )
+    data.num_nodes = int(data.x.size(0))
+    data.train_mask = torch.cat(train_parts, dim=0)
+    data.val_mask = torch.cat(val_parts, dim=0)
+    data.test_mask = torch.cat(test_parts, dim=0)
+    data.y_type = torch.cat(type_parts, dim=0)
+    data.native_node_type = data.y_type.clone()
+    data.node_labels = data.y_type.clone()
+    data.edge_rel_type = torch.cat(rel_blocks, dim=0)
+    data.node_type_names = node_types
+    data.target_node_type = "author"
+    data.target_node_type_id = int(DBLP_NODE_TYPE["author"])
+    data.original_num_nodes_by_type = {node_type: int(hetero[node_type].num_nodes) for node_type in node_types}
+    data.node_offsets = {node_type: int(offset) for node_type, offset in offsets.items()}
+    data.num_classes = int(hetero["author"].y.max().item()) + 1
+
+    author_test_indices = torch.where(data.test_mask)[0].detach().cpu().tolist()
+    target_nodes = config.get("target_nodes", None)
+    if target_nodes is None:
+        num_samples = int(config.get("num_target_nodes", config.get("max_targets", min(64, len(author_test_indices)))))
+        if len(author_test_indices) > num_samples:
+            gen = torch.Generator()
+            gen.manual_seed(random_seed)
+            perm = torch.randperm(len(author_test_indices), generator=gen)
+            target_nodes = [int(author_test_indices[idx]) for idx in perm[:num_samples].tolist()]
+        else:
+            target_nodes = [int(v) for v in author_test_indices]
+    else:
+        target_nodes = [int(v) for v in target_nodes]
+
+    config["input_dim"] = int(data.x.size(1))
+    config["output_dim"] = int(data.num_classes)
+    config["num_nodes"] = int(data.num_nodes)
+    config["num_test"] = int(data.test_mask.sum().item())
+    config["data_size"] = int(hetero["author"].num_nodes)
+    config["constraint_type_source"] = str(config.get("constraint_type_source", "native_type"))
+
+    return {
+        "dataset": dataset,
+        "hetero_data": hetero,
+        "data": data,
+        "input_dim": int(data.x.size(1)),
+        "output_dim": int(data.num_classes),
+        "num_nodes": int(data.num_nodes),
+        "target_population_size": int(hetero["author"].num_nodes),
+        "multi_label": False,
+        "splits": {
+            "train_mask": data.train_mask,
+            "val_mask": data.val_mask,
+            "test_mask": data.test_mask,
+        },
+        "target_nodes": target_nodes,
+    }
 
 
 def dataset_func(config):
@@ -83,6 +230,11 @@ def dataset_func(config):
             "train_loader": DataLoader(train_set, batch_size=batch_size, shuffle=True),
             "val_loader": DataLoader(val_set, batch_size=batch_size, shuffle=False),
             "test_loader": DataLoader(test_set, batch_size=1, shuffle=False),
+            "splits": {
+                "train_indices": list(getattr(train_set, "indices", [])),
+                "val_indices": list(getattr(val_set, "indices", [])),
+                "test_indices": list(getattr(test_set, "indices", [])),
+            },
         }
         return loaders
 
@@ -314,6 +466,18 @@ def dataset_func(config):
         }
         
         return data_resource
+
+    if data_name == "DBLP":
+        print(f"[dataset_func] Loading DBLP dataset from {os.path.join(data_dir, 'DBLP')}...")
+        data_resource = _build_dblp_homogeneous_view(config, data_dir, random_seed)
+        data = data_resource["data"]
+        print(
+            "[dataset_func] DBLP homogeneous view: "
+            f"nodes={data.num_nodes}, edges={data.edge_index.size(1)}, "
+            f"input_dim={config['input_dim']}, output_dim={config['output_dim']}, "
+            f"author_test={int(data.test_mask.sum().item())}"
+        )
+        return data_resource
     
 
     if data_size is None or num_class is None:
@@ -375,7 +539,8 @@ def compute_fidelity_minus(model, original_graph, explanation_subgraph, device, 
         target_node_id: int, 目标节点在子图中的ID (仅用于节点分类)
     
     Returns:
-        float: fidelity- 值，越大表示解释越重要（移除后预测概率下降越多）
+        float: raw fidelity^- 值 = Pr(M(G)) - Pr(M(G_s))。
+        按论文定义这是误差型指标，越小越好；若用于用户可视化，通常画 1 - fidelity^-。
     """
     model.eval()
     
@@ -441,58 +606,77 @@ def compute_fidelity_minus(model, original_graph, explanation_subgraph, device, 
     return fidelity_minus
 
 
-def compute_constraint_coverage(subgraph, constraints, Budget=8):
+def compute_direct_constraint_coverage(subgraph, constraints, workload_graph=None, return_stats: bool = False):
     """
-    计算解释子图覆盖了多少个约束
-    
-    使用与ApxChase相同的matching逻辑:
-    1. 对每个constraint，在subgraph上找head matches
-    2. 检查repair cost是否 <= Budget
-    3. 如果满足，则该constraint被覆盖
-    
-    Args:
-        subgraph: 解释子图 (torch_geometric.data.Data)
-        constraints: 约束列表
-        Budget: repair cost的预算阈值
-    
-    Returns:
-        tuple: (covered_constraint_names, coverage_ratio)
-            - covered_constraint_names: list of str, 被覆盖的约束名称
-            - coverage_ratio: float, 覆盖比例 = |covered| / |total|
+    计算 baseline witness 自身直接满足的约束覆盖率。
+
+    baseline 不构造 grounded provenance graph，也不执行 G_s -> G_g 的
+    backchase 扩展；只有当单个 witness 自身已经严格满足约束时，才记为覆盖。
+    因此这里把 witness 自身同时作为 witness 图和 observed 图来评估，
+    不允许借用 witness 外部边，也不允许假设性新增 ΔE。
+    为了与主实验输出对齐，这里同时计算：
+    - global coverage = |Covered(Q)| / |Σ|
+    - normalized coverage = |Covered(Q)| / |Active(Q)|
+    其中 Active(Q) 来自当前 witness 图上的 consequent 匹配与 antecedent
+    节点齐全性判断。
     """
     try:
-        from matcher import find_head_matches, backchase_repair_cost
+        from matcher import find_pattern_matches, backchase_repair_cost
+        from grounding_semantics import evaluate_grounding, constraint_activation_summary
     except ImportError:
-        # 如果matcher模块不可用，返回空结果
-        return [], 0.0
-    
-    covered_names = []
-    
-    for constraint in constraints:
-        constraint_name = constraint.get("name", str(constraint))
-        
         try:
-            # 1. 找到head matches
-            head_matches = find_head_matches(subgraph, constraint)
-            
-            if not head_matches:
-                continue
-            
-            # 2. 对每个match检查repair cost
-            for match in head_matches:
-                cost = backchase_repair_cost(subgraph, constraint, match, Budget)
-                
-                # 如果cost有效且在预算内，则该constraint被覆盖
-                if cost is not None and cost <= Budget:
-                    covered_names.append(constraint_name)
-                    break  # 一个constraint只需要一个有效match即可
-                    
-        except Exception as e:
-            # 如果matching出错，跳过该constraint
-            continue
-    
-    # 去重并排序
-    covered_names = sorted(set(covered_names))
-    coverage_ratio = len(covered_names) / len(constraints) if len(constraints) > 0 else 0.0
-    
-    return covered_names, coverage_ratio
+            from .matcher import find_pattern_matches, backchase_repair_cost
+            from .grounding_semantics import evaluate_grounding, constraint_activation_summary
+        except ImportError:
+            empty = {
+                "covered_constraint_names": [],
+                "hit_constraint_names": [],
+                "active_constraint_names": [],
+                "covered_constraint_count": 0,
+                "hit_constraint_count": 0,
+                "active_constraint_count": 0,
+                "coverage_ratio_global": 0.0,
+                "coverage_ratio_normalized": 0.0,
+            }
+            return empty if return_stats else ([], 0.0)
+
+    workload = subgraph
+
+    if not hasattr(subgraph, "_nodes_in_full") or getattr(subgraph, "_nodes_in_full") is None:
+        subgraph._nodes_in_full = torch.arange(subgraph.num_nodes)
+    if not hasattr(subgraph, "_nodes_in_observed") or getattr(subgraph, "_nodes_in_observed") is None:
+        subgraph._nodes_in_observed = torch.arange(subgraph.num_nodes)
+    if not hasattr(workload, "_nodes_in_full") or getattr(workload, "_nodes_in_full") is None:
+        workload._nodes_in_full = torch.arange(workload.num_nodes)
+    if not hasattr(workload, "_nodes_in_observed") or getattr(workload, "_nodes_in_observed") is None:
+        workload._nodes_in_observed = torch.arange(workload.num_nodes)
+
+    grounded = evaluate_grounding(
+        subgraph,
+        constraints,
+        0,
+        observed_graph=workload,
+        find_pattern_matches_fn=find_pattern_matches,
+        backchase_repair_cost_fn=backchase_repair_cost,
+    )
+    covered_names = sorted(grounded)
+    activation = constraint_activation_summary(workload, constraints, workload, find_pattern_matches)
+    hit_names = sorted(activation["hit_names"])
+    active_names = sorted(activation["active_names"])
+    total_constraints = len(constraints)
+    coverage_ratio_global = len(covered_names) / total_constraints if total_constraints > 0 else 0.0
+    coverage_ratio_normalized = len(covered_names) / len(active_names) if active_names else 0.0
+
+    stats = {
+        "covered_constraint_names": covered_names,
+        "hit_constraint_names": hit_names,
+        "active_constraint_names": active_names,
+        "covered_constraint_count": len(covered_names),
+        "hit_constraint_count": len(hit_names),
+        "active_constraint_count": len(active_names),
+        "coverage_ratio_global": float(coverage_ratio_global),
+        "coverage_ratio_normalized": float(coverage_ratio_normalized),
+    }
+    if return_stats:
+        return stats
+    return covered_names, float(coverage_ratio_normalized)

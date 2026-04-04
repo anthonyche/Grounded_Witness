@@ -1,0 +1,21 @@
+constraint_names:
+  - mined_dblp_aat_2_19_3_c1_p1_t_1
+  - mined_dblp_aat_2_19_3_c2_p2_t_1
+  - mined_dblp_aat_1_19_3_c1_p1_t_1
+  - mined_dblp_aat_1_19_3_c2_p2_t_1
+  - mined_dblp_aat_2_18_3_c1_p1_t_1
+  - mined_dblp_aat_2_18_3_c2_p2_t_1
+  - mined_dblp_aat_1_17_3_c1_p1_t_1
+  - mined_dblp_aat_1_17_3_c2_p2_t_1
+  - mined_dblp_aat_1_18_3_c1_p1_t_1
+  - mined_dblp_aat_1_18_3_c2_p2_t_1
+  - mined_dblp_aat_2_17_3_c1_p1_t_1
+  - mined_dblp_aat_2_17_3_c2_p2_t_1
+  - mined_dblp_apt_3_7_19_c1_p_t_1
+  - mined_dblp_apt_3_5_19_c1_p_t_1
+  - mined_dblp_aat_1_19_2_c1_p1_t_1
+  - mined_dblp_aat_1_19_2_c2_p2_t_1
+  - mined_dblp_apt_3_4_19_c1_p_t_1
+  - mined_dblp_apt_3_6_19_c1_p_t_1
+  - mined_dblp_aat_0_19_3_c1_p1_t_1
+  - mined_dblp_aat_0_19_3_c2_p2_t_1
