@@ -118,7 +118,11 @@ def _edge_match(attrs_graph: Dict[str, Any], attrs_pattern: Dict[str, Any]) -> b
     return rel_type in allowed_rel
 
 
-def find_pattern_matches(graph_view: Any, pattern_spec: Dict[str, Any]) -> List[Dict[str, int]]:
+def iter_pattern_matches(
+    graph_view: Any,
+    pattern_spec: Dict[str, Any],
+    max_results: Optional[int] = None,
+) -> Iterable[Dict[str, int]]:
     """
     Find all VF2 subgraph matches of a pattern specification in the given graph view.
     Each result is a dict mapping pattern variables to node ids in the graph view.
@@ -133,7 +137,7 @@ def find_pattern_matches(graph_view: Any, pattern_spec: Dict[str, Any]) -> List[
         edge_match=lambda eg, ep: _edge_match(eg, ep),
     )
 
-    results: List[Dict[str, int]] = []
+    emitted = 0
     for mapping in matcher.subgraph_isomorphisms_iter():
         inverse: Dict[str, int] = {}
         for node_graph, node_pattern in mapping.items():
@@ -143,7 +147,18 @@ def find_pattern_matches(graph_view: Any, pattern_spec: Dict[str, Any]) -> List[
             bound_nodes = [inverse[var] for var in distinct if var in inverse]
             if len(bound_nodes) != len(set(bound_nodes)):
                 continue
-        results.append(inverse)
+        yield inverse
+        emitted += 1
+        if max_results is not None and emitted >= int(max_results):
+            break
+
+
+def find_pattern_matches(
+    graph_view: Any,
+    pattern_spec: Dict[str, Any],
+    max_results: Optional[int] = None,
+) -> List[Dict[str, int]]:
+    results: List[Dict[str, int]] = list(iter_pattern_matches(graph_view, pattern_spec, max_results=max_results))
     return results
 
 

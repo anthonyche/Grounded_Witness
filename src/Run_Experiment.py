@@ -79,6 +79,12 @@ def _mask_ratio_token(value: Any) -> str:
         return str(value)
 
 
+def _effective_mask_ratio(config: Dict[str, Any]) -> Any:
+    if config.get("mask_ratio", None) is not None:
+        return config.get("mask_ratio")
+    return config.get("incompleteness", None)
+
+
 def _prepare_observed_graph_workload(
     pos: int,
     dataset_resource: Dict[str, Any],
@@ -89,10 +95,11 @@ def _prepare_observed_graph_workload(
     graph, dataset_idx = _select_test_graph(dataset_resource, dataset, pos)
     true_label = int(graph.y.item()) if hasattr(graph, "y") and graph.y is not None else None
     cache_root = _observed_cache_dir(config)
+    mask_ratio = _effective_mask_ratio(config)
     cache_key = (
         f"graph_{int(dataset_idx)}"
         f"__max_masks_{int(config.get('max_masks', 1))}"
-        f"__mask_ratio_{_mask_ratio_token(config.get('mask_ratio', None))}"
+        f"__mask_ratio_{_mask_ratio_token(mask_ratio)}"
         f"__seed_{int(config.get('random_seed', 0))}"
         f"__pc_{1 if bool(config.get('preserve_connectivity', True)) else 0}"
         f"__constraints_{_constraint_signature(constraints)}.pt"
@@ -108,7 +115,7 @@ def _prepare_observed_graph_workload(
         base_graph,
         constraints,
         max_masks=config.get("max_masks", 1),
-        mask_ratio=config.get("mask_ratio", None),
+        mask_ratio=mask_ratio,
         seed=config.get("random_seed"),
         preserve_connectivity=config.get("preserve_connectivity", True),
     )

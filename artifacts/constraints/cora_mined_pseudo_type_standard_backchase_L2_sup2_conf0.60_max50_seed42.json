@@ -1,0 +1,3671 @@
+{
+  "dataset": "CORA",
+  "constraint_source": "mined",
+  "constraint_type_source": "pseudo_type",
+  "constraint_rule_mode": "standard_backchase",
+  "random_seed": 42,
+  "num_constraints": 50,
+  "constraints": [
+    {
+      "name": "mined_cora_extension_2_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 39,
+        "confidence": 0.9512195121951219
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 39,
+        "confidence": 0.6153846153846154
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 36,
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 36,
+        "confidence": 0.8780487804878049
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 36,
+        "confidence": 0.6388888888888888
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 32,
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 32,
+        "confidence": 0.71875
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 28,
+        "confidence": 0.8484848484848485
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_2_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 28,
+        "confidence": 0.6829268292682927
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_2_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 28,
+        "confidence": 0.6785714285714286
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 26,
+        "confidence": 0.7878787878787878
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_2_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 26,
+        "confidence": 0.65
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 24,
+        "confidence": 0.7916666666666666
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 24,
+        "confidence": 0.7272727272727273
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 23,
+        "confidence": 0.696969696969697
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_6_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 23,
+        "confidence": 0.696969696969697
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_6_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 23,
+        "confidence": 0.6956521739130435
+      }
+    },
+    {
+      "name": "mined_cora_triangle_6_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 23,
+        "confidence": 0.6956521739130435
+      }
+    },
+    {
+      "name": "mined_cora_extension_4_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 18,
+        "confidence": 0.9473684210526315
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_2_4",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 18,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 18,
+        "confidence": 0.6428571428571429
+      }
+    },
+    {
+      "name": "mined_cora_extension_4_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 16,
+        "confidence": 0.8421052631578947
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_2_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 16,
+        "confidence": 0.75
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 16,
+        "confidence": 0.7272727272727273
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_3_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 15,
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_3_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 15,
+        "confidence": 0.6818181818181818
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_6_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 15,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_4_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 14,
+        "confidence": 0.8571428571428571
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_4_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 14,
+        "confidence": 0.7368421052631579
+      }
+    },
+    {
+      "name": "mined_cora_triangle_3_2_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 14,
+        "confidence": 0.7142857142857143
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_2_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 14,
+        "confidence": 0.6363636363636364
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_3_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 13,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_3_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 13,
+        "confidence": 0.7692307692307693
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_3_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 12,
+        "confidence": 0.9230769230769231
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_5_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 12,
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "mined_cora_triangle_3_3_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 12,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_extension_7_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              7
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              7
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 11,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.9090909090909091
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_4_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.7142857142857143
+      }
+    },
+    {
+      "name": "mined_cora_triangle_5_6_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 10,
+        "confidence": 0.7
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_6_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 10,
+        "confidence": 0.6
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_3_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 9,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_5_4",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 9,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_3_3_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 9,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_3_6_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 9,
+        "confidence": 0.6666666666666666
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_4_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 8,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_6_4",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 8,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_cora_triangle_2_4_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 8,
+        "confidence": 0.75
+      }
+    },
+    {
+      "name": "mined_cora_triangle_4_6_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "C"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "triangle_closure",
+        "support": 8,
+        "confidence": 0.625
+      }
+    }
+  ],
+  "mining": {
+    "constraint_templates": [
+      "triangle",
+      "extension"
+    ],
+    "constraint_min_support": 2,
+    "constraint_min_confidence": 0.6,
+    "constraint_max_patterns": 50,
+    "constraint_mining_hops": 2,
+    "constraint_mining_max_samples": 64
+  }
+}

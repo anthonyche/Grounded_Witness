@@ -16,7 +16,7 @@ External hooks (pluggable) — functions with the `_fn` suffix can be overridden
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import heapq
 
 from itertools import count
@@ -33,11 +33,11 @@ from torch_geometric.utils import k_hop_subgraph, to_undirected
 # `src.apxchase` or plain `apxchase`.
 try:
     from constraints import get_constraints  # optional
-    from matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from matcher import backchase_repair_cost, find_pattern_matches, iter_pattern_matches, MatchResult
     from grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
 except ImportError:
     from .constraints import get_constraints  # optional
-    from .matcher import backchase_repair_cost, find_pattern_matches, MatchResult
+    from .matcher import backchase_repair_cost, find_pattern_matches, iter_pattern_matches, MatchResult
     from .grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
 
 
@@ -202,6 +202,7 @@ def _consequent_seed_masks(
     H: Data,
     Sigma: Sequence,
     max_seed_per_constraint: int,
+    max_matches_per_constraint: Optional[int] = None,
 ) -> List[Tensor]:
     if find_pattern_matches is None or not Sigma:
         return []
@@ -212,7 +213,11 @@ def _consequent_seed_masks(
 
     for tgd in Sigma:
         try:
-            matches = find_pattern_matches(H, tgd.get("consequent", {}))
+            matches = find_pattern_matches(
+                H,
+                tgd.get("consequent", {}),
+                max_results=max_matches_per_constraint,
+            )
         except Exception:
             matches = []
         if not matches:
@@ -244,6 +249,58 @@ def _consequent_seed_masks(
     return seeds
 
 
+def _iter_consequent_seed_masks(
+    H: Data,
+    Sigma: Sequence,
+    max_seed_per_constraint: int,
+    max_matches_per_constraint: Optional[int] = None,
+    max_total_candidates: Optional[int] = None,
+):
+    if (iter_pattern_matches is None and find_pattern_matches is None) or not Sigma:
+        return
+
+    edge_lookup = _edge_index_lookup(H)
+    seen_global: Set[Tuple[int, ...]] = set()
+    emitted = 0
+
+    for tgd in Sigma:
+        consequent = tgd.get("consequent", {}) if isinstance(tgd, dict) else {}
+        consequent_edges = list(consequent.get("edges", []))
+        added = 0
+        try:
+            if iter_pattern_matches is not None:
+                match_iter = iter_pattern_matches(H, consequent, max_results=max_matches_per_constraint)
+            else:
+                match_iter = iter(find_pattern_matches(H, consequent, max_results=max_matches_per_constraint))
+        except Exception:
+            match_iter = iter(())
+
+        for binding in match_iter:
+            mask = torch.zeros(H.edge_index.size(1), dtype=torch.bool, device=H.edge_index.device)
+            for edge_spec in consequent_edges:
+                u_var, v_var = edge_spec[0], edge_spec[1]
+                if u_var not in binding or v_var not in binding:
+                    continue
+                u = int(binding[u_var])
+                v = int(binding[v_var])
+                key = (u, v) if u <= v else (v, u)
+                for idx in edge_lookup.get(key, []):
+                    mask[idx] = True
+            if mask.sum().item() == 0:
+                continue
+            sig = _edge_mask_signature(mask)
+            if sig in seen_global:
+                continue
+            seen_global.add(sig)
+            yield mask.clone()
+            emitted += 1
+            added += 1
+            if max_total_candidates is not None and emitted >= int(max_total_candidates):
+                return
+            if added >= max_seed_per_constraint:
+                break
+
+
 def _consequent_seed_infos(
     H: Data,
     Sigma: Sequence,
@@ -253,6 +310,7 @@ def _consequent_seed_infos(
     root: Optional[int],
     L: int,
     diversity_bonus: float,
+    max_matches_per_constraint: Optional[int] = None,
 ) -> List[SeedInfo]:
     if find_pattern_matches is None or not Sigma:
         return []
@@ -264,7 +322,11 @@ def _consequent_seed_infos(
 
     for tgd in Sigma:
         try:
-            matches = find_pattern_matches(H, tgd.get("consequent", {}))
+            matches = find_pattern_matches(
+                H,
+                tgd.get("consequent", {}),
+                max_results=max_matches_per_constraint,
+            )
         except Exception:
             matches = []
         if not matches:
@@ -374,6 +436,159 @@ def _legacy_prefix_masks(
         pos = int(round(i * (len(stream) - 1) / max(1, max_checkpoints - 1)))
         selected.append(stream[pos])
     return selected
+
+
+def _iter_graph_prefix_seed_masks(
+    H: Data,
+    root: Optional[int],
+    shells: Sequence[Tensor],
+    max_seed_per_shell: int,
+    max_total_candidates: Optional[int] = None,
+    strategy: str = "early",
+):
+    if max_seed_per_shell <= 0:
+        return
+
+    edge_mask = torch.zeros(H.edge_index.size(1), dtype=torch.bool, device=H.edge_index.device)
+    current_nodes: Set[int] = {int(root)} if root is not None else set()
+    seen: Set[Tuple[int, ...]] = set()
+    emitted = 0
+
+    def _shell_indices(shell: Tensor) -> List[int]:
+        if shell.dtype == torch.bool:
+            return torch.nonzero(shell, as_tuple=False).flatten().detach().cpu().tolist()
+        return shell.detach().cpu().tolist()
+
+    def _accepts(u: int, v: int, nodes: Set[int]) -> bool:
+        if root is None:
+            return True
+        if not nodes:
+            return True
+        return (u in nodes) or (v in nodes)
+
+    for shell in shells:
+        indices = _shell_indices(shell)
+        if not indices:
+            continue
+
+        if strategy == "spaced":
+            shell_nodes = set(current_nodes)
+            accepted_total = 0
+            for e_idx in indices:
+                u = int(H.edge_index[0, e_idx])
+                v = int(H.edge_index[1, e_idx])
+                if not _accepts(u, v, shell_nodes):
+                    continue
+                accepted_total += 1
+                shell_nodes.add(u)
+                shell_nodes.add(v)
+            if accepted_total == 0:
+                continue
+            keep = min(int(max_seed_per_shell), accepted_total)
+            checkpoints = sorted({
+                int(round(i * (accepted_total - 1) / max(1, keep - 1))) + 1
+                for i in range(keep)
+            })
+            checkpoint_set = set(checkpoints)
+        else:
+            checkpoint_set = set(range(1, int(max_seed_per_shell) + 1))
+
+        accepted_idx = 0
+        for e_idx in indices:
+            u = int(H.edge_index[0, e_idx])
+            v = int(H.edge_index[1, e_idx])
+            if not _accepts(u, v, current_nodes):
+                continue
+            edge_mask[int(e_idx)] = True
+            current_nodes.add(u)
+            current_nodes.add(v)
+            accepted_idx += 1
+            if accepted_idx not in checkpoint_set:
+                continue
+            sig = _edge_mask_signature(edge_mask)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            yield edge_mask.clone()
+            emitted += 1
+            if max_total_candidates is not None and emitted >= int(max_total_candidates):
+                return
+
+
+def _graph_seed_masks(
+    H: Data,
+    root: Optional[int],
+    shells: Sequence[Tensor],
+    seed_budget: int,
+    max_total_candidates: Optional[int] = None,
+    strategy: str = "spaced",
+) -> List[Tensor]:
+    if strategy != "diverse":
+        return list(
+            _iter_graph_prefix_seed_masks(
+                H,
+                root=root,
+                shells=shells,
+                max_seed_per_shell=max(1, int(seed_budget)),
+                max_total_candidates=max_total_candidates,
+                strategy=strategy,
+            )
+        )
+
+    out: List[Tensor] = []
+    seen: Set[Tuple[int, ...]] = set()
+
+    def _append(mask_iter: Iterable[Tensor]) -> None:
+        nonlocal out
+        for mask in mask_iter:
+            sig = _edge_mask_signature(mask)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(mask.clone())
+            if max_total_candidates is not None and len(out) >= int(max_total_candidates):
+                return
+
+    def _reverse_shell(shell: Tensor) -> Tensor:
+        if shell.dtype == torch.bool:
+            return shell.clone()
+        return torch.flip(shell, dims=[0])
+
+    reversed_shells = [_reverse_shell(shell) for shell in shells]
+
+    _append(
+        _iter_graph_prefix_seed_masks(
+            H,
+            root=root,
+            shells=shells,
+            max_seed_per_shell=max(1, int(seed_budget)),
+            max_total_candidates=max_total_candidates,
+            strategy="early",
+        )
+    )
+    if max_total_candidates is None or len(out) < int(max_total_candidates):
+        _append(
+            _iter_graph_prefix_seed_masks(
+                H,
+                root=root,
+                shells=shells,
+                max_seed_per_shell=max(1, int(seed_budget)),
+                max_total_candidates=None if max_total_candidates is None else int(max_total_candidates) - len(out),
+                strategy="spaced",
+            )
+        )
+    if max_total_candidates is None or len(out) < int(max_total_candidates):
+        _append(
+            _iter_graph_prefix_seed_masks(
+                H,
+                root=root,
+                shells=reversed_shells,
+                max_seed_per_shell=max(1, int(seed_budget)),
+                max_total_candidates=None if max_total_candidates is None else int(max_total_candidates) - len(out),
+                strategy="spaced",
+            )
+        )
+    return out
 
 
 def _bounded_expand_masks(
@@ -502,18 +717,17 @@ def _bounded_prune_full_masks(
     return masks
 
 
-def _edge_support_from_seed_infos(seed_infos: Sequence[SeedInfo], num_edges: int) -> List[float]:
+def _edge_support_from_seed_masks(seed_masks: Sequence[Tensor], num_edges: int) -> List[float]:
     support = [0.0] * int(num_edges)
-    for info in seed_infos:
-        weight = 1.0 / (1.0 + float(max(0, info.estimated_grounding_cost)))
-        for idx in torch.nonzero(info.mask, as_tuple=False).flatten().tolist():
-            support[int(idx)] += weight
+    for mask in seed_masks:
+        for idx in torch.nonzero(mask, as_tuple=False).flatten().tolist():
+            support[int(idx)] += 1.0
     return support
 
 
 def _hybrid_prune_full_masks(
     H: Data,
-    seed_infos: Sequence[SeedInfo],
+    seed_masks: Sequence[Tensor],
     candidate_score_fn: Callable[[Tensor], float],
     max_masks: int,
     delete_budget: int,
@@ -527,7 +741,7 @@ def _hybrid_prune_full_masks(
         return []
 
     graph_mode = root is None
-    edge_support = _edge_support_from_seed_infos(seed_infos, M)
+    edge_support = _edge_support_from_seed_masks(seed_masks, M)
     hops = _node_hops(H, root)
     full_mask = torch.ones(M, dtype=torch.bool, device=H.edge_index.device)
     results: List[Tensor] = []
@@ -594,7 +808,13 @@ def _generate_candidate_edge_masks(
     near_full_delete_budget: int = 3,
     near_full_branch_factor: int = 6,
     near_full_beam_width: int = 4,
+    max_consequent_matches_per_constraint: Optional[int] = None,
+    use_full_mask_prune: bool = True,
+    use_legacy_prefix_masks: bool = True,
 ) -> List[Tensor]:
+    del Sigma  # Candidate generation is graph-only; constraints are used later in Γ/grounding.
+    seed_budget = max(1, int(seed_per_constraint)) * max(1, int(branch_factor))
+
     if not use_ranked_candidate_prioritization:
         max_candidates = max(1, int(max_candidates))
         candidate_masks: List[Tensor] = []
@@ -611,7 +831,14 @@ def _generate_candidate_edge_masks(
                 if len(candidate_masks) >= max_candidates:
                     return
 
-        seed_masks = _consequent_seed_masks(H, Sigma, max_seed_per_constraint=max(1, int(seed_per_constraint)))
+        seed_masks = _graph_seed_masks(
+            H,
+            root=root,
+            shells=shells,
+            seed_budget=seed_budget,
+            max_total_candidates=max_candidates,
+            strategy="diverse",
+        )
         _append(seed_masks)
         if len(candidate_masks) < max_candidates:
             expanded = _bounded_expand_masks(
@@ -624,7 +851,7 @@ def _generate_candidate_edge_masks(
                 max_masks=max_candidates - len(candidate_masks),
             )
             _append(expanded)
-        if len(candidate_masks) < max_candidates:
+        if use_full_mask_prune and len(candidate_masks) < max_candidates:
             _append(
                 _bounded_prune_full_masks(
                     H,
@@ -634,7 +861,7 @@ def _generate_candidate_edge_masks(
                     max_masks=max_candidates - len(candidate_masks),
                 )
             )
-        if len(candidate_masks) < max_candidates:
+        if use_legacy_prefix_masks and len(candidate_masks) < max_candidates:
             _append(_legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints))))
 
         if not candidate_masks:
@@ -646,16 +873,6 @@ def _generate_candidate_edge_masks(
     candidate_masks: List[Tensor] = []
     seen: Set[Tuple[int, ...]] = set()
     hop_cache = _node_hops(H, root)
-    seed_infos = _consequent_seed_infos(
-        H,
-        Sigma,
-        max_seed_per_constraint=max(1, int(seed_per_constraint)),
-        pool_factor=max(2, int(ranking_pool_factor)),
-        local_budget=max(1, int(local_budget)),
-        root=root,
-        L=max(1, len(shells)),
-        diversity_bonus=float(diversity_bonus),
-    )
     score_cache: Dict[Tuple[int, ...], float] = {}
 
     def _candidate_priority(mask: Tensor) -> float:
@@ -666,21 +883,14 @@ def _generate_candidate_edge_masks(
         size_ratio = float(mask.sum().item()) / max(1, int(H.edge_index.size(1)))
         node_ratio = float(len(_nodes_from_mask(H, mask, root))) / max(1, int(H.num_nodes))
         target_rel = _mask_target_relevance(H, mask, root, hop_cache, max(1, len(shells)))
-        supported_infos = [info for info in seed_infos if _mask_contains(mask, info.mask)]
-        constraint_to_cost: Dict[str, int] = {}
-        for info in supported_infos:
-            prev = constraint_to_cost.get(info.constraint_name)
-            if prev is None or info.estimated_grounding_cost < prev:
-                constraint_to_cost[info.constraint_name] = int(info.estimated_grounding_cost)
-        distinct_constraint_potential = len(constraint_to_cost)
-        consequent_match_count = len(supported_infos)
-        grounding_potential = 0.0
-        if constraint_to_cost:
-            grounding_potential = sum(1.0 / (1.0 + float(cost)) for cost in constraint_to_cost.values()) / len(constraint_to_cost)
+        edge_count = float(mask.sum().item())
+        connectivity_bonus = 1.0 if edge_count > 0 else 0.0
+        root_bonus = 1.0 if (root is None or int(root) in _nodes_from_mask(H, mask, root)) else 0.0
         priority = (
-            2.2 * distinct_constraint_potential
-            + 0.35 * consequent_match_count
-            + 1.1 * grounding_potential
+            1.6 * target_rel
+            + 0.7 * connectivity_bonus
+            + 0.5 * root_bonus
+            + 0.25 * min(edge_count / max(1.0, float(max(1, len(shells)))), 1.0)
             + 0.8 * target_rel
             - 1.7 * size_ratio
             - 0.5 * node_ratio
@@ -699,7 +909,14 @@ def _generate_candidate_edge_masks(
             if len(candidate_masks) >= limit:
                 return
 
-    seed_masks = [info.mask.clone() for info in seed_infos]
+    seed_masks = _graph_seed_masks(
+        H,
+        root=root,
+        shells=shells,
+        seed_budget=seed_budget,
+        max_total_candidates=pool_limit,
+        strategy="diverse",
+    )
     graph_mode = root is None
 
     if not use_task_aware_hybrid_generation:
@@ -717,7 +934,7 @@ def _generate_candidate_edge_masks(
                 diversity_bonus=float(diversity_bonus),
             )
             _append(expanded, pool_limit)
-        if len(candidate_masks) < pool_limit:
+        if use_full_mask_prune and len(candidate_masks) < pool_limit:
             _append(
                 _bounded_prune_full_masks(
                     H,
@@ -728,7 +945,7 @@ def _generate_candidate_edge_masks(
                 ),
                 pool_limit,
             )
-        if len(candidate_masks) < pool_limit:
+        if use_legacy_prefix_masks and len(candidate_masks) < pool_limit:
             _append(_legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints))), pool_limit)
     else:
         if graph_mode:
@@ -768,7 +985,7 @@ def _generate_candidate_edge_masks(
 
         prune_masks = _hybrid_prune_full_masks(
             H,
-            seed_infos=seed_infos,
+            seed_masks=seed_masks,
             candidate_score_fn=_candidate_priority,
             max_masks=max(1, prune_quota * max(2, int(ranking_pool_factor))),
             delete_budget=max(1, int(near_full_delete_budget)) if graph_mode else max(1, min(1, int(near_full_delete_budget))),
@@ -777,7 +994,7 @@ def _generate_candidate_edge_masks(
             root=root,
             diversity_bonus=float(diversity_bonus),
         )
-        legacy_masks = _legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints)))
+        legacy_masks = _legacy_prefix_masks(H, root, shells, max_checkpoints=max(0, int(legacy_checkpoints))) if use_legacy_prefix_masks else []
 
         branch_selected: List[Tensor] = []
         branch_selected.extend(
@@ -825,6 +1042,24 @@ def _generate_candidate_edge_masks(
         diversity_bonus=float(diversity_bonus),
     )
     return ranked[:max_candidates]
+
+
+def _iter_candidate_edge_masks_streaming_fast(
+    H: Data,
+    root: Optional[int],
+    shells: Sequence[Tensor],
+    seed_budget: int,
+    max_total_candidates: int,
+):
+    for mask in _iter_graph_prefix_seed_masks(
+        H,
+        root=root,
+        shells=shells,
+        max_seed_per_shell=max(1, int(seed_budget)),
+        max_total_candidates=max(1, int(max_total_candidates)),
+        strategy="early",
+    ):
+        yield mask
 
 # ------------------------------- Default hooks --------------------------------
 
@@ -1187,6 +1422,20 @@ class ApxChase:
         near_full_delete_budget: int = 3,
         near_full_branch_factor: int = 6,
         near_full_beam_width: int = 4,
+        large_graph_fast_mode: bool = True,
+        large_graph_node_threshold: int = 2500,
+        large_graph_edge_threshold: int = 8000,
+        large_graph_seed_per_constraint: int = 4,
+        large_graph_candidate_expand_steps: int = 1,
+        large_graph_candidate_branch_factor: int = 2,
+        large_graph_candidate_beam_width: int = 4,
+        large_graph_candidate_max_masks: int = 16,
+        large_graph_max_consequent_matches_per_constraint: int = 8,
+        large_graph_stream_max_candidates: int = 128,
+        large_graph_disable_ranked_prioritization: bool = True,
+        large_graph_disable_task_aware_hybrid: bool = True,
+        large_graph_disable_full_mask_prune: bool = True,
+        large_graph_disable_legacy_prefix: bool = True,
         debug: bool = False,
     ):
         self.model = model
@@ -1216,6 +1465,20 @@ class ApxChase:
         self.near_full_delete_budget = int(near_full_delete_budget)
         self.near_full_branch_factor = int(near_full_branch_factor)
         self.near_full_beam_width = int(near_full_beam_width)
+        self.large_graph_fast_mode = bool(large_graph_fast_mode)
+        self.large_graph_node_threshold = int(large_graph_node_threshold)
+        self.large_graph_edge_threshold = int(large_graph_edge_threshold)
+        self.large_graph_seed_per_constraint = int(large_graph_seed_per_constraint)
+        self.large_graph_candidate_expand_steps = int(large_graph_candidate_expand_steps)
+        self.large_graph_candidate_branch_factor = int(large_graph_candidate_branch_factor)
+        self.large_graph_candidate_beam_width = int(large_graph_candidate_beam_width)
+        self.large_graph_candidate_max_masks = int(large_graph_candidate_max_masks)
+        self.large_graph_max_consequent_matches_per_constraint = int(large_graph_max_consequent_matches_per_constraint)
+        self.large_graph_stream_max_candidates = int(large_graph_stream_max_candidates)
+        self.large_graph_disable_ranked_prioritization = bool(large_graph_disable_ranked_prioritization)
+        self.large_graph_disable_task_aware_hybrid = bool(large_graph_disable_task_aware_hybrid)
+        self.large_graph_disable_full_mask_prune = bool(large_graph_disable_full_mask_prune)
+        self.large_graph_disable_legacy_prefix = bool(large_graph_disable_legacy_prefix)
         self.debug = debug
         self._last_run_stats = {}
         # If user did not pass a custom gamma_fn, upgrade to a version
@@ -1412,33 +1675,83 @@ class ApxChase:
             heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
         return window_coverage(best_graphs)
 
+    def _candidate_generation_plan(self, H: Data) -> Tuple[Dict[str, Any], str, bool]:
+        num_nodes = int(getattr(H, 'num_nodes', 0) or 0)
+        num_edges = int(H.edge_index.size(1)) if getattr(H, 'edge_index', None) is not None else 0
+        large_graph_fastpath = self.large_graph_fast_mode and (
+            num_nodes >= self.large_graph_node_threshold or num_edges >= self.large_graph_edge_threshold
+        )
+        kwargs: Dict[str, Any] = {
+            'seed_per_constraint': self.seed_per_constraint,
+            'expand_steps': self.candidate_expand_steps,
+            'branch_factor': self.candidate_branch_factor,
+            'beam_width': self.candidate_beam_width,
+            'max_candidates': self.candidate_max_masks,
+            'legacy_checkpoints': self.legacy_prefix_checkpoints,
+            'local_budget': self.B,
+            'use_ranked_candidate_prioritization': self.use_ranked_candidate_prioritization,
+            'use_task_aware_hybrid_generation': self.use_task_aware_hybrid_generation,
+            'ranking_pool_factor': self.ranking_pool_factor,
+            'diversity_bonus': self.ranking_diversity_bonus,
+            'max_near_full_candidates': self.max_near_full_candidates,
+            'near_full_delete_budget': self.near_full_delete_budget,
+            'near_full_branch_factor': self.near_full_branch_factor,
+            'near_full_beam_width': self.near_full_beam_width,
+            'max_consequent_matches_per_constraint': None,
+            'use_full_mask_prune': True,
+            'use_legacy_prefix_masks': True,
+            'stream_mode': False,
+        }
+        mode = "graph_ranked"
+        if large_graph_fastpath:
+            kwargs['seed_per_constraint'] = min(kwargs['seed_per_constraint'], self.large_graph_seed_per_constraint)
+            kwargs['expand_steps'] = min(kwargs['expand_steps'], self.large_graph_candidate_expand_steps)
+            kwargs['branch_factor'] = min(kwargs['branch_factor'], self.large_graph_candidate_branch_factor)
+            kwargs['beam_width'] = min(kwargs['beam_width'], self.large_graph_candidate_beam_width)
+            kwargs['max_candidates'] = min(kwargs['max_candidates'], self.large_graph_candidate_max_masks)
+            kwargs['max_consequent_matches_per_constraint'] = self.large_graph_max_consequent_matches_per_constraint
+            if self.large_graph_disable_ranked_prioritization:
+                kwargs['use_ranked_candidate_prioritization'] = False
+            if self.large_graph_disable_task_aware_hybrid:
+                kwargs['use_task_aware_hybrid_generation'] = False
+            if self.large_graph_disable_full_mask_prune:
+                kwargs['use_full_mask_prune'] = False
+            if self.large_graph_disable_legacy_prefix:
+                kwargs['use_legacy_prefix_masks'] = False
+            kwargs['stream_mode'] = True
+            kwargs['stream_max_candidates'] = self.large_graph_stream_max_candidates
+            mode = "graph_stream_fast"
+        return kwargs, mode, large_graph_fastpath
+
     def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
         # shells of edge indices
         shells = _edge_shells_by_hop(H, root=root, L=self.L)
         self._log(f"Edge shells: {len(shells)} levels; total edges M={H.edge_index.size(1)}")
         # Store full masked/induced graph for reuse in _update_window
         self._H_full = H
-        candidate_masks = _generate_candidate_edge_masks(
-            H,
-            root=root,
-            shells=shells,
-            Sigma=self.Sigma,
-            seed_per_constraint=self.seed_per_constraint,
-            expand_steps=self.candidate_expand_steps,
-            branch_factor=self.candidate_branch_factor,
-            beam_width=self.candidate_beam_width,
-            max_candidates=self.candidate_max_masks,
-            legacy_checkpoints=self.legacy_prefix_checkpoints,
-            local_budget=self.B,
-            use_ranked_candidate_prioritization=self.use_ranked_candidate_prioritization,
-            use_task_aware_hybrid_generation=self.use_task_aware_hybrid_generation,
-            ranking_pool_factor=self.ranking_pool_factor,
-            diversity_bonus=self.ranking_diversity_bonus,
-            max_near_full_candidates=self.max_near_full_candidates,
-            near_full_delete_budget=self.near_full_delete_budget,
-            near_full_branch_factor=self.near_full_branch_factor,
-            near_full_beam_width=self.near_full_beam_width,
-        )
+        candidate_plan, candidate_generation_mode, large_graph_fastpath = self._candidate_generation_plan(H)
+        stream_mode = bool(candidate_plan.pop('stream_mode', False))
+        stream_max_candidates = int(candidate_plan.pop('stream_max_candidates', 0) or 0)
+        if stream_mode:
+            candidate_iter = _iter_candidate_edge_masks_streaming_fast(
+                H,
+                root=root,
+                shells=shells,
+                seed_budget=int(candidate_plan.get('seed_per_constraint', self.seed_per_constraint))
+                * max(1, int(candidate_plan.get('branch_factor', self.candidate_branch_factor))),
+                max_total_candidates=max(1, stream_max_candidates),
+            )
+            distinct_candidate_count = 0
+        else:
+            candidate_masks = _generate_candidate_edge_masks(
+                H,
+                root=root,
+                shells=shells,
+                Sigma=self.Sigma,
+                **candidate_plan,
+            )
+            candidate_iter = iter(candidate_masks)
+            distinct_candidate_count = int(len(candidate_masks))
         W_k: List[Tuple[float, Data]] = []
         covered: Set = set()
 
@@ -1447,10 +1760,12 @@ class ApxChase:
         n_admitted = 0
         fallback_used = False
 
-        for edge_mask in candidate_masks:
+        for edge_mask in candidate_iter:
             if self.debug:
                 self._log(f"Candidate #{n_candidates+1}: |E(G_s)|={int(edge_mask.sum().item())}")
             n_candidates += 1
+            if stream_mode:
+                distinct_candidate_count += 1
             Gs = _induce_subgraph_from_edges(H, edge_mask)
             if self.debug and n_candidates == 1:
                 ok = _default_verify_witness(self.model, root, Gs, debug=True)
@@ -1507,12 +1822,16 @@ class ApxChase:
         fallback_selected = any(extract_witness_edges_in_full(Gs) == full_witness_edges for Gs in S_k)
         self._last_run_stats = {
             'num_candidates_generated': int(n_candidates),
-            'distinct_candidates_generated': int(len(candidate_masks)),
+            'distinct_candidates_generated': int(distinct_candidate_count),
             'num_candidates_verified': int(n_verified),
             'num_candidates_admitted': int(n_admitted),
             'num_selected_witnesses': int(len(S_k)),
             'num_covered_constraints': int(len(Sigma_star)),
             'fallback_used': bool(fallback_used),
             'fallback_selected': bool(fallback_selected),
+            'candidate_generation_mode': str(candidate_generation_mode),
+            'large_graph_fastpath': bool(large_graph_fastpath),
+            'input_num_nodes': int(getattr(H, 'num_nodes', 0) or 0),
+            'input_num_edges': int(H.edge_index.size(1)) if getattr(H, 'edge_index', None) is not None else 0,
         }
         return Sigma_star, S_k

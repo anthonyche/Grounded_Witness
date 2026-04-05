@@ -1,0 +1,46 @@
+run_name: tmp_exh_gcn3_l3_single_624
+dataset: dblp
+model_name: gcn3
+methods:
+  - Exh
+
+factor_name: ""
+factor_values: []
+
+output_root: outputs/raw/bundles
+reuse_observed_graph_cache: true
+
+random_seed: 42
+sigma_size: 20
+local_budget_k: 2
+L: 3
+gamma: 1.0
+alpha: 0.5
+beta: 0.5
+incompleteness: 0.05
+target_ratio: 0.01
+
+target_nodes:
+  - 624
+
+constraint_source: mined
+constraint_rule_mode: standard_backchase
+constraint_filter_target_matchability: true
+constraint_pool_mode: original
+preserve_connectivity: true
+max_masks: 1
+
+apx_large_graph_fast_mode: true
+apx_large_graph_node_threshold: 2500
+apx_large_graph_edge_threshold: 8000
+apx_large_graph_seed_per_constraint: 4
+apx_large_graph_candidate_expand_steps: 0
+apx_large_graph_candidate_branch_factor: 2
+apx_large_graph_candidate_beam_width: 4
+apx_large_graph_candidate_max_masks: 16
+apx_large_graph_max_consequent_matches_per_constraint: 8
+apx_large_graph_stream_max_candidates: 128
+apx_large_graph_disable_ranked_prioritization: true
+apx_large_graph_disable_task_aware_hybrid: true
+apx_large_graph_disable_full_mask_prune: true
+apx_large_graph_disable_legacy_prefix: true

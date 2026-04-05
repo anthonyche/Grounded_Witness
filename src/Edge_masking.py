@@ -10,7 +10,7 @@ Standard backchase semantics:
     so backchase has to recover P from the same node set
 """
 
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import random
 
 import torch
@@ -34,6 +34,65 @@ except Exception:
 
 def _as_undirected(u: int, v: int) -> Tuple[int, int]:
     return (u, v) if u <= v else (v, u)
+
+
+def _parse_edge_spec(edge: Any) -> Tuple[Any, Any, Any]:
+    if not isinstance(edge, (tuple, list)):
+        raise ValueError(f"Unsupported edge spec: {edge}")
+    if len(edge) == 2:
+        return edge[0], edge[1], None
+    if len(edge) == 3:
+        return edge[0], edge[1], edge[2]
+    raise ValueError(f"Unsupported edge spec length: {edge}")
+
+
+def _canonical_pattern_edge(edge: Any) -> Tuple[str, str, Optional[Tuple[Any, ...]]]:
+    u, v, rel = _parse_edge_spec(edge)
+    u_s, v_s = str(u), str(v)
+    if u_s <= v_s:
+        a, b = u_s, v_s
+    else:
+        a, b = v_s, u_s
+    if rel is None:
+        rel_key = None
+    elif isinstance(rel, dict):
+        rel_allowed = rel.get("rel_in", rel.get("in", []))
+        rel_key = tuple(sorted(rel_allowed))
+    elif isinstance(rel, (list, tuple, set)):
+        rel_key = tuple(sorted(rel))
+    else:
+        rel_key = (rel,)
+    return a, b, rel_key
+
+
+def _merge_full_motif(constraint: TGD) -> Dict[str, Any]:
+    antecedent = constraint.get("antecedent", {})
+    consequent = constraint.get("consequent", {})
+    nodes: Dict[str, Any] = {}
+    for source in (antecedent.get("nodes", {}), consequent.get("nodes", {})):
+        for var, spec in source.items():
+            if var not in nodes:
+                nodes[var] = dict(spec)
+                continue
+            merged = dict(nodes[var])
+            if "in" in merged or "in" in spec:
+                merged["in"] = sorted(set(merged.get("in", [])) | set(spec.get("in", [])))
+            nodes[var] = merged
+    edge_map: Dict[Tuple[str, str, Optional[Tuple[Any, ...]]], Any] = {}
+    for edge in list(antecedent.get("edges", [])) + list(consequent.get("edges", [])):
+        edge_map[_canonical_pattern_edge(edge)] = edge
+    distinct = sorted(set(list(antecedent.get("distinct", [])) + list(consequent.get("distinct", []))))
+    return {
+        "nodes": nodes,
+        "edges": list(edge_map.values()),
+        "distinct": distinct,
+    }
+
+
+def _antecedent_only_edges(constraint: TGD) -> List[Any]:
+    antecedent_edges = list(constraint.get("antecedent", {}).get("edges", []))
+    consequent_keys = {_canonical_pattern_edge(edge) for edge in list(constraint.get("consequent", {}).get("edges", []))}
+    return [edge for edge in antecedent_edges if _canonical_pattern_edge(edge) not in consequent_keys]
 
 
 def _build_edge_bucket(edge_index: torch.Tensor) -> Dict[Tuple[int, int], List[int]]:
@@ -67,8 +126,8 @@ def mask_edges_by_constraints(
     preserve_connectivity: bool = True,
 ) -> Tuple[Data, List[Tuple[int, int]]]:
     """
-    Build an observed graph by removing edges from already bound portions of P
-    while preserving consequent-side matches for c.
+    Build an observed graph by matching the full clean motif P ∪ c and removing
+    only antecedent-only edges P \\ c under those complete bindings.
     """
     if seed is not None:
         random.seed(seed)
@@ -86,22 +145,21 @@ def mask_edges_by_constraints(
     weighted_pool: List[Tuple[Tuple[int, int], int]] = []
 
     for constraint in constraints:
-        consequent = constraint.get("consequent", {})
-        antecedent = constraint.get("antecedent", {})
-        consequent_edges = list(consequent.get("edges", []))
-        antecedent_edges = list(antecedent.get("edges", []))
-        if not consequent_edges or not antecedent_edges:
+        antecedent_edges = list(constraint.get("antecedent", {}).get("edges", []))
+        consequent_edges = list(constraint.get("consequent", {}).get("edges", []))
+        droppable_edges = _antecedent_only_edges(constraint)
+        if not consequent_edges or not antecedent_edges or not droppable_edges:
             continue
 
         priority = len(antecedent_edges) if prefer_larger_antecedents else 1
         try:
-            consequent_matches = find_pattern_matches(data, consequent)
+            full_matches = find_pattern_matches(data, _merge_full_motif(constraint))
         except Exception:
-            consequent_matches = []
+            full_matches = []
 
-        for binding in consequent_matches:
-            for edge_spec in antecedent_edges:
-                u_var, v_var = edge_spec[0], edge_spec[1]
+        for binding in full_matches:
+            for edge_spec in droppable_edges:
+                u_var, v_var, _ = _parse_edge_spec(edge_spec)
                 if u_var not in binding or v_var not in binding:
                     continue
                 u = int(binding[u_var])

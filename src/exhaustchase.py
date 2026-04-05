@@ -10,7 +10,7 @@ which is intentionally included in timing measurements to demonstrate the cost.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import heapq
 import time
 
@@ -30,12 +30,12 @@ try:
     from constraints import get_constraints  # optional
     from matcher import backchase_repair_cost, find_pattern_matches, MatchResult
     from grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
-    from apxchase import _generate_candidate_edge_masks, _default_verify_witness as _shared_default_verify_witness
+    from apxchase import _generate_candidate_edge_masks, _iter_candidate_edge_masks_streaming_fast, _default_verify_witness as _shared_default_verify_witness
 except ImportError:
     from .constraints import get_constraints  # optional
     from .matcher import backchase_repair_cost, find_pattern_matches, MatchResult
     from .grounding_semantics import evaluate_grounding, extract_witness_edges_in_full, pair_quality, window_coverage, window_objective
-    from .apxchase import _generate_candidate_edge_masks, _default_verify_witness as _shared_default_verify_witness
+    from .apxchase import _generate_candidate_edge_masks, _iter_candidate_edge_masks_streaming_fast, _default_verify_witness as _shared_default_verify_witness
 
 
 def _constraint_names(constraints) -> List[str]:
@@ -345,6 +345,20 @@ class ExhaustChase:
         near_full_delete_budget: int = 3,
         near_full_branch_factor: int = 6,
         near_full_beam_width: int = 4,
+        large_graph_fast_mode: bool = True,
+        large_graph_node_threshold: int = 2500,
+        large_graph_edge_threshold: int = 8000,
+        large_graph_seed_per_constraint: int = 4,
+        large_graph_candidate_expand_steps: int = 1,
+        large_graph_candidate_branch_factor: int = 2,
+        large_graph_candidate_beam_width: int = 4,
+        large_graph_candidate_max_masks: int = 16,
+        large_graph_max_consequent_matches_per_constraint: int = 8,
+        large_graph_stream_max_candidates: int = 128,
+        large_graph_disable_ranked_prioritization: bool = True,
+        large_graph_disable_task_aware_hybrid: bool = True,
+        large_graph_disable_full_mask_prune: bool = True,
+        large_graph_disable_legacy_prefix: bool = True,
         debug: bool = False,
         max_enforce_iterations: int = 100,  # Maximum iterations for exhaustive enforcement
     ):
@@ -375,6 +389,20 @@ class ExhaustChase:
         self.near_full_delete_budget = int(near_full_delete_budget)
         self.near_full_branch_factor = int(near_full_branch_factor)
         self.near_full_beam_width = int(near_full_beam_width)
+        self.large_graph_fast_mode = bool(large_graph_fast_mode)
+        self.large_graph_node_threshold = int(large_graph_node_threshold)
+        self.large_graph_edge_threshold = int(large_graph_edge_threshold)
+        self.large_graph_seed_per_constraint = int(large_graph_seed_per_constraint)
+        self.large_graph_candidate_expand_steps = int(large_graph_candidate_expand_steps)
+        self.large_graph_candidate_branch_factor = int(large_graph_candidate_branch_factor)
+        self.large_graph_candidate_beam_width = int(large_graph_candidate_beam_width)
+        self.large_graph_candidate_max_masks = int(large_graph_candidate_max_masks)
+        self.large_graph_max_consequent_matches_per_constraint = int(large_graph_max_consequent_matches_per_constraint)
+        self.large_graph_stream_max_candidates = int(large_graph_stream_max_candidates)
+        self.large_graph_disable_ranked_prioritization = bool(large_graph_disable_ranked_prioritization)
+        self.large_graph_disable_task_aware_hybrid = bool(large_graph_disable_task_aware_hybrid)
+        self.large_graph_disable_full_mask_prune = bool(large_graph_disable_full_mask_prune)
+        self.large_graph_disable_legacy_prefix = bool(large_graph_disable_legacy_prefix)
         self.debug = debug
         self.max_enforce_iterations = max_enforce_iterations
         self._last_run_stats = {}
@@ -643,11 +671,23 @@ class ExhaustChase:
         H.root = int(v_t)
         self._H_observed = data
         self._verify_reference_graph = data
+        original_target = int(v_t)
+        try:
+            if getattr(H, '_nodes_in_full', None) is not None:
+                original_target = int(H._nodes_in_full[int(v_t)].item())
+        except Exception:
+            original_target = int(v_t)
         
         self._log(f"Start explain_node: v_t={v_t}, |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}")
+        print(f"[Exh | Node {original_target}] stage=enforce_constraints")
         
         # Exhaustive enforcement phase
         H_clean, enforce_time, iterations = self._exhaustive_enforce(H)
+        print(
+            f"[Exh | Node {original_target}] stage=generate_candidates "
+            f"|V|={H_clean.num_nodes}, |E|={H_clean.edge_index.size(1)}, "
+            f"enforce_iters={iterations}, enforce_time={enforce_time:.4f}s"
+        )
         
         # Keep the materialized chased graph for the baseline's own enumeration path.
         self._H_clean = H_clean
@@ -677,9 +717,15 @@ class ExhaustChase:
         self._verify_reference_graph = data
         
         self._log(f"Start explain_graph: |V(H)|={H.num_nodes}, |E(H)|={H.edge_index.size(1)}")
+        print("[Exh | Graph] stage=enforce_constraints")
         
         # Exhaustive enforcement phase
         H_clean, enforce_time, iterations = self._exhaustive_enforce(H)
+        print(
+            f"[Exh | Graph] stage=generate_candidates "
+            f"|V|={H_clean.num_nodes}, |E|={H_clean.edge_index.size(1)}, "
+            f"enforce_iters={iterations}, enforce_time={enforce_time:.4f}s"
+        )
         
         # Keep the materialized chased graph for the baseline's own enumeration path.
         self._H_clean = H_clean
@@ -798,27 +844,29 @@ class ExhaustChase:
         self._log(f"Edge shells: {len(shells)} levels; total edges M={H.edge_index.size(1)}")
         # Store full masked/induced graph for reuse in _update_window
         self._H_full = H
-        candidate_masks = _generate_candidate_edge_masks(
-            H,
-            root=root,
-            shells=shells,
-            Sigma=self.Sigma,
-            seed_per_constraint=self.seed_per_constraint,
-            expand_steps=self.candidate_expand_steps,
-            branch_factor=self.candidate_branch_factor,
-            beam_width=self.candidate_beam_width,
-            max_candidates=self.candidate_max_masks,
-            legacy_checkpoints=self.legacy_prefix_checkpoints,
-            local_budget=self.B,
-            use_ranked_candidate_prioritization=self.use_ranked_candidate_prioritization,
-            use_task_aware_hybrid_generation=self.use_task_aware_hybrid_generation,
-            ranking_pool_factor=self.ranking_pool_factor,
-            diversity_bonus=self.ranking_diversity_bonus,
-            max_near_full_candidates=self.max_near_full_candidates,
-            near_full_delete_budget=self.near_full_delete_budget,
-            near_full_branch_factor=self.near_full_branch_factor,
-            near_full_beam_width=self.near_full_beam_width,
-        )
+        candidate_plan, candidate_generation_mode, large_graph_fastpath = self._candidate_generation_plan(H)
+        stream_mode = bool(candidate_plan.pop('stream_mode', False))
+        stream_max_candidates = int(candidate_plan.pop('stream_max_candidates', 0) or 0)
+        if stream_mode:
+            candidate_iter = _iter_candidate_edge_masks_streaming_fast(
+                H,
+                root=root,
+                shells=shells,
+                seed_budget=int(candidate_plan.get('seed_per_constraint', self.seed_per_constraint))
+                * max(1, int(candidate_plan.get('branch_factor', self.candidate_branch_factor))),
+                max_total_candidates=max(1, stream_max_candidates),
+            )
+            distinct_candidate_count = 0
+        else:
+            candidate_masks = _generate_candidate_edge_masks(
+                H,
+                root=root,
+                shells=shells,
+                Sigma=self.Sigma,
+                **candidate_plan,
+            )
+            candidate_iter = iter(candidate_masks)
+            distinct_candidate_count = int(len(candidate_masks))
         W_k: List[Tuple[float, Data]] = []
         covered: Set = set()
 
@@ -827,10 +875,12 @@ class ExhaustChase:
         n_admitted = 0
         fallback_used = False
 
-        for edge_mask in candidate_masks:
+        for edge_mask in candidate_iter:
             if self.debug:
                 self._log(f"Candidate #{n_candidates+1}: |E(G_s)|={int(edge_mask.sum().item())}")
             n_candidates += 1
+            if stream_mode:
+                distinct_candidate_count += 1
             Gs_clean = _induce_subgraph_from_edges(H, edge_mask)
             Gs = self._project_candidate_to_observed(Gs_clean)
             ok = self.verify_witness_fn(self.model, root, Gs)
@@ -884,12 +934,64 @@ class ExhaustChase:
         fallback_selected = any(extract_witness_edges_in_full(Gs) == full_witness_edges for Gs in S_k)
         self._last_run_stats = {
             'num_candidates_generated': int(n_candidates),
-            'distinct_candidates_generated': int(len(candidate_masks)),
+            'distinct_candidates_generated': int(distinct_candidate_count),
             'num_candidates_verified': int(n_verified),
             'num_candidates_admitted': int(n_admitted),
             'num_selected_witnesses': int(len(S_k)),
             'num_covered_constraints': int(len(Sigma_star)),
             'fallback_used': bool(fallback_used),
             'fallback_selected': bool(fallback_selected),
+            'candidate_generation_mode': str(candidate_generation_mode),
+            'large_graph_fastpath': bool(large_graph_fastpath),
+            'input_num_nodes': int(getattr(H, 'num_nodes', 0) or 0),
+            'input_num_edges': int(H.edge_index.size(1)) if getattr(H, 'edge_index', None) is not None else 0,
         }
         return Sigma_star, S_k
+
+    def _candidate_generation_plan(self, H: Data) -> Tuple[Dict[str, Any], str, bool]:
+        num_nodes = int(getattr(H, 'num_nodes', 0) or 0)
+        num_edges = int(H.edge_index.size(1)) if getattr(H, 'edge_index', None) is not None else 0
+        large_graph_fastpath = self.large_graph_fast_mode and (
+            num_nodes >= self.large_graph_node_threshold or num_edges >= self.large_graph_edge_threshold
+        )
+        kwargs: Dict[str, Any] = {
+            'seed_per_constraint': self.seed_per_constraint,
+            'expand_steps': self.candidate_expand_steps,
+            'branch_factor': self.candidate_branch_factor,
+            'beam_width': self.candidate_beam_width,
+            'max_candidates': self.candidate_max_masks,
+            'legacy_checkpoints': self.legacy_prefix_checkpoints,
+            'local_budget': self.B,
+            'use_ranked_candidate_prioritization': self.use_ranked_candidate_prioritization,
+            'use_task_aware_hybrid_generation': self.use_task_aware_hybrid_generation,
+            'ranking_pool_factor': self.ranking_pool_factor,
+            'diversity_bonus': self.ranking_diversity_bonus,
+            'max_near_full_candidates': self.max_near_full_candidates,
+            'near_full_delete_budget': self.near_full_delete_budget,
+            'near_full_branch_factor': self.near_full_branch_factor,
+            'near_full_beam_width': self.near_full_beam_width,
+            'max_consequent_matches_per_constraint': None,
+            'use_full_mask_prune': True,
+            'use_legacy_prefix_masks': True,
+            'stream_mode': False,
+        }
+        mode = "graph_ranked"
+        if large_graph_fastpath:
+            kwargs['seed_per_constraint'] = min(kwargs['seed_per_constraint'], self.large_graph_seed_per_constraint)
+            kwargs['expand_steps'] = min(kwargs['expand_steps'], self.large_graph_candidate_expand_steps)
+            kwargs['branch_factor'] = min(kwargs['branch_factor'], self.large_graph_candidate_branch_factor)
+            kwargs['beam_width'] = min(kwargs['beam_width'], self.large_graph_candidate_beam_width)
+            kwargs['max_candidates'] = min(kwargs['max_candidates'], self.large_graph_candidate_max_masks)
+            kwargs['max_consequent_matches_per_constraint'] = self.large_graph_max_consequent_matches_per_constraint
+            if self.large_graph_disable_ranked_prioritization:
+                kwargs['use_ranked_candidate_prioritization'] = False
+            if self.large_graph_disable_task_aware_hybrid:
+                kwargs['use_task_aware_hybrid_generation'] = False
+            if self.large_graph_disable_full_mask_prune:
+                kwargs['use_full_mask_prune'] = False
+            if self.large_graph_disable_legacy_prefix:
+                kwargs['use_legacy_prefix_masks'] = False
+            kwargs['stream_mode'] = True
+            kwargs['stream_max_candidates'] = self.large_graph_stream_max_candidates
+            mode = "graph_stream_fast"
+        return kwargs, mode, large_graph_fastpath

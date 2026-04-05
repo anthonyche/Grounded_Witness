@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Set, Tuple
 import heapq
+import time
 
 from itertools import count
 
@@ -28,6 +29,10 @@ def _cos_sim(a: Tensor, b: Tensor) -> float:
     if denom == 0.0:
         return 0.0
     return float(torch.dot(a, b).item() / denom)
+
+
+def _canonical_pair(u: int, v: int) -> Tuple[int, int]:
+    return (u, v) if u <= v else (v, u)
 
 # Try multiple import paths so this works whether the module is imported as
 # `src.apxchase` or plain `apxchase`.
@@ -303,8 +308,65 @@ def _extract_node_embeddings(model: torch.nn.Module, H: Data) -> Optional[Tensor
             return H.x
     return None
 
+
+def _build_edmonds_context(H: Data, emb: Optional[Tensor]):
+    if not _HAS_NX:
+        return None
+    import networkx as nx  # local import to keep scope clean
+
+    E = int(H.edge_index.size(1))
+    N = int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else (H.x.size(0) if getattr(H, 'x', None) is not None else 0))
+    G = nx.DiGraph()
+    UG = nx.Graph()
+    for n in range(N):
+        G.add_node(n)
+        UG.add_node(n)
+
+    directed_specs = []
+    edge_to_eid = {}
+    undir_eids = {}
+    undir_weight = {}
+    for idx in range(E):
+        u = int(H.edge_index[0, idx].item())
+        v = int(H.edge_index[1, idx].item())
+        w_uv = _cos_sim(emb[u], emb[v]) if emb is not None else 0.0
+        w_vu = _cos_sim(emb[v], emb[u]) if emb is not None else 0.0
+        G.add_edge(u, v, weight=w_uv, _eid=idx)
+        G.add_edge(v, u, weight=w_vu, _eid=idx)
+        directed_specs.append((u, v, int(idx), float(w_uv)))
+        directed_specs.append((v, u, int(idx), float(w_vu)))
+        edge_to_eid[(u, v)] = int(idx)
+        edge_to_eid[(v, u)] = int(idx)
+        ku, kv = _canonical_pair(u, v)
+        undir_eids.setdefault((ku, kv), []).append(int(idx))
+        undir_weight[(ku, kv)] = max(float(w_uv), float(w_vu), float(undir_weight.get((ku, kv), float("-inf"))))
+
+    undirected_specs = []
+    for (u, v), eids in undir_eids.items():
+        base_w = float(undir_weight[(u, v)])
+        UG.add_edge(u, v, weight=base_w)
+        undirected_specs.append((u, v, tuple(eids), base_w))
+
+    return {
+        "graph": G,
+        "directed_specs": directed_specs,
+        "edge_to_eid": edge_to_eid,
+        "undirected_graph": UG,
+        "undirected_specs": undirected_specs,
+        "undirected_eids": undir_eids,
+        "num_edges": E,
+    }
+
+
 # --- Edmonds/Chu–Liu candidate generator ---
-def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], noise_std: float = 1e-3):
+def _candidate_by_edmonds(
+    H: Data,
+    root: Optional[int],
+    emb: Optional[Tensor],
+    noise_std: float = 1e-3,
+    edmonds_ctx=None,
+    rng: Optional[torch.Generator] = None,
+):
     """
     Returns an edge_mask (Bool[E]) selecting the edges that belong to the
     (maximum) arborescence component reachable from `root`. If NetworkX is
@@ -331,58 +393,51 @@ def _candidate_by_edmonds(H: Data, root: Optional[int], emb: Optional[Tensor], n
             return edge_mask
     try:
         import networkx as nx  # local import to keep scope clean
-        G = nx.DiGraph()
-        # Nodes:
-        N = int(H.num_nodes if getattr(H, 'num_nodes', None) is not None else (H.x.size(0) if getattr(H, 'x', None) is not None else 0))
-        for n in range(N):
-            G.add_node(n)
-        # Edge weights = cosine(h_u, h_v) + noise
-        rng = torch.Generator()
-        rng.manual_seed(torch.randint(0, 10_000_000, (1,)).item())
-        eps = torch.randn(E, generator=rng).tolist()
-        for idx in range(E):
-            u = int(H.edge_index[0, idx].item()); v = int(H.edge_index[1, idx].item())
-            w_uv = _cos_sim(emb[u], emb[v]) if emb is not None else 0.0
-            w_vu = _cos_sim(emb[v], emb[u]) if emb is not None else 0.0
-            nse = float(eps[idx]) * noise_std
-            G.add_edge(u, v, weight=w_uv + nse, _eid=idx)
-            G.add_edge(v, u, weight=w_vu + nse, _eid=idx)  # share the same underlying undirected edge id
+        ctx = edmonds_ctx or _build_edmonds_context(H, emb)
+        if ctx is None:
+            raise RuntimeError("NetworkX context unavailable")
+        UG = ctx.get("undirected_graph")
+        undirected_specs = ctx.get("undirected_specs")
+        undirected_eids = ctx.get("undirected_eids", {})
 
-        # Run Edmonds maximum arborescence
-        # Use modern NetworkX API (Branching class was deprecated)
-        Ar = nx.maximum_spanning_arborescence(G, attr='weight', default=0)
-        
-        # IMPORTANT: nx.maximum_spanning_arborescence does NOT preserve edge attributes!
-        # We need to build a mapping from (u,v) in Ar back to _eid in G
-        edge_to_eid = {}
-        for u, v, data in G.edges(data=True):
-            edge_to_eid[(u, v)] = data.get('_eid', None)
+        if rng is None:
+            rng = torch.Generator()
+            rng.manual_seed(torch.randint(0, 10_000_000, (1,)).item())
 
-        # If a specific root is requested, keep the weakly connected arborescence
-        # component containing that root. For typed local motifs, keeping only
-        # outward-reachable edges from `root` is too brittle: if `root` is not
-        # the true arborescence root, the candidate collapses to a tiny branch
-        # and loses most consequent matches.
-        if root is None:
-            # Pick the TRUE arborescence root: node with in-degree = 0
-            ar_roots = [n for n in Ar.nodes if Ar.in_degree(n) == 0]
-            if ar_roots:
-                root = ar_roots[0]  # Use the actual arborescence root
-            else:
-                # Fallback: pick node with max out-degree
-                root = max(Ar.nodes, key=lambda n: Ar.out_degree(n)) if Ar.number_of_nodes() > 0 else 0
+        noise_by_edge = None
+        if noise_std > 0:
+            noise_by_edge = torch.randn(len(undirected_specs), generator=rng).tolist() if undirected_specs is not None else None
 
-        # Keep HeuC strict: select only the underlying undirected edges that
-        # belong to the maximum spanning arborescence itself. Do not induce all
-        # original edges on the weak component; that collapses HeuC into a
-        # near-full-graph generator and destroys its expected speed/conciseness.
-        for u, v in Ar.edges():
-            eid = edge_to_eid.get((u, v))
-            if eid is not None:
+        # Edge scores are cosine similarities, which are symmetric by
+        # construction. So the bidirected Edmonds objective is equivalent to
+        # selecting the maximum-weight underlying undirected tree and then
+        # treating its edges as the candidate tree family.
+        if UG is None or undirected_specs is None:
+            raise RuntimeError("Undirected MST context unavailable")
+        for idx_spec, (u, v, _eids, base_w) in enumerate(undirected_specs):
+            noise = 0.0 if noise_by_edge is None else float(noise_by_edge[idx_spec]) * noise_std
+            UG[u][v]["weight"] = float(base_w + noise)
+
+        T = nx.maximum_spanning_tree(UG, weight='weight')
+
+        selected_nodes = None
+        if root is not None and T.number_of_nodes() > 0 and int(root) in T:
+            try:
+                selected_nodes = set(nx.node_connected_component(T, int(root)))
+            except Exception:
+                selected_nodes = {int(root)}
+
+        for u, v in T.edges():
+            if selected_nodes is not None and (u not in selected_nodes or v not in selected_nodes):
+                continue
+            ku, kv = _canonical_pair(int(u), int(v))
+            for eid in undirected_eids.get((ku, kv), ()):
                 edge_mask[int(eid)] = True
 
         # If still empty (e.g., root isolated), connect greedily by picking incident edges of root
         if edge_mask.sum().item() == 0 and E > 0:
+            if root is None:
+                return edge_mask
             r = int(root)
             # pick top-k edges adjacent to r (all of them here)
             for idx in range(E):
@@ -527,6 +582,20 @@ class ApxChase:
         near_full_delete_budget: int = 3,
         near_full_branch_factor: int = 6,
         near_full_beam_width: int = 4,
+        large_graph_fast_mode: bool = True,
+        large_graph_node_threshold: int = 2500,
+        large_graph_edge_threshold: int = 8000,
+        large_graph_seed_per_constraint: int = 4,
+        large_graph_candidate_expand_steps: int = 1,
+        large_graph_candidate_branch_factor: int = 2,
+        large_graph_candidate_beam_width: int = 4,
+        large_graph_candidate_max_masks: int = 16,
+        large_graph_max_consequent_matches_per_constraint: int = 8,
+        large_graph_stream_max_candidates: int = 128,
+        large_graph_disable_ranked_prioritization: bool = True,
+        large_graph_disable_task_aware_hybrid: bool = True,
+        large_graph_disable_full_mask_prune: bool = True,
+        large_graph_disable_legacy_prefix: bool = True,
         debug: bool = False,
     ):
         self.model = model
@@ -556,8 +625,25 @@ class ApxChase:
         self.near_full_delete_budget = int(near_full_delete_budget)
         self.near_full_branch_factor = int(near_full_branch_factor)
         self.near_full_beam_width = int(near_full_beam_width)
+        # HeuChase itself does not use the Apx/Exh large-graph candidate path,
+        # but keep the constructor signature aligned with the shared caller.
+        self.large_graph_fast_mode = bool(large_graph_fast_mode)
+        self.large_graph_node_threshold = int(large_graph_node_threshold)
+        self.large_graph_edge_threshold = int(large_graph_edge_threshold)
+        self.large_graph_seed_per_constraint = int(large_graph_seed_per_constraint)
+        self.large_graph_candidate_expand_steps = int(large_graph_candidate_expand_steps)
+        self.large_graph_candidate_branch_factor = int(large_graph_candidate_branch_factor)
+        self.large_graph_candidate_beam_width = int(large_graph_candidate_beam_width)
+        self.large_graph_candidate_max_masks = int(large_graph_candidate_max_masks)
+        self.large_graph_max_consequent_matches_per_constraint = int(large_graph_max_consequent_matches_per_constraint)
+        self.large_graph_stream_max_candidates = int(large_graph_stream_max_candidates)
+        self.large_graph_disable_ranked_prioritization = bool(large_graph_disable_ranked_prioritization)
+        self.large_graph_disable_task_aware_hybrid = bool(large_graph_disable_task_aware_hybrid)
+        self.large_graph_disable_full_mask_prune = bool(large_graph_disable_full_mask_prune)
+        self.large_graph_disable_legacy_prefix = bool(large_graph_disable_legacy_prefix)
         self.debug = debug
         self._last_run_stats = {}
+        self._last_window_update_stats = {}
         # If user did not pass a custom gamma_fn, upgrade to a version
         # that also computes repair costs using backchase on a clean graph.
         if gamma_fn is None:
@@ -649,6 +735,7 @@ class ApxChase:
         return out
 
     def _update_window(self, W_k: List[Tuple[float, Data]], Gs: Data, covered: Set) -> Set:
+        update_t0 = time.time()
         H_view = Gs
         if self.debug:
             self._log(f"Candidate view: |V|={H_view.num_nodes}, |E|={H_view.edge_index.size(1)}")
@@ -674,8 +761,12 @@ class ApxChase:
                 nonzero = [(n, c) for (n, c) in per_counts if c > 0]
                 top5 = sorted(nonzero, key=lambda x: -x[1])[:5]
                 self._log(f"Consequent matches on candidate: total={total_hits}; top={top5}")
+        pair_t0 = time.time()
         pair_score = pair_quality(Gs, self.conc_fn, self.alpha, self.beta)
+        pair_sec = time.time() - pair_t0
+        gamma_t0 = time.time()
         Gamma_G = self.gamma_fn(H_view, self.Sigma, self.B)
+        gamma_sec = time.time() - gamma_t0
         new_cov = Gamma_G - covered
         if self.debug:
             names_all = _constraint_names(Gamma_G)
@@ -686,7 +777,6 @@ class ApxChase:
 
         current_graphs = [entry[2] for entry in W_k]
         total_constraints = len(self.Sigma)
-        current_obj = window_objective(current_graphs, total_constraints, self.gamma)
 
         if len(current_graphs) < self.k:
             if self.debug:
@@ -698,12 +788,37 @@ class ApxChase:
             W_k.clear()
             for graph in trial_graphs:
                 heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+            self._last_window_update_stats = {
+                'pair_sec': float(pair_sec),
+                'gamma_sec': float(gamma_sec),
+                'window_sec': float(time.time() - update_t0 - pair_sec - gamma_sec),
+                'update_total_sec': float(time.time() - update_t0),
+                'grounded_count': int(len(Gamma_G)),
+                'new_covered_count': int(len(new_cov)),
+                'window_size_before': int(len(current_graphs)),
+                'window_size_after': int(len(trial_graphs)),
+                'admitted': True,
+                'replaced': False,
+            }
             return window_coverage(trial_graphs)
 
         if len(Gamma_G) == 0:
             self._log("Skip replacement: no grounded constraints on this candidate.")
+            self._last_window_update_stats = {
+                'pair_sec': float(pair_sec),
+                'gamma_sec': float(gamma_sec),
+                'window_sec': float(time.time() - update_t0 - pair_sec - gamma_sec),
+                'update_total_sec': float(time.time() - update_t0),
+                'grounded_count': 0,
+                'new_covered_count': 0,
+                'window_size_before': int(len(current_graphs)),
+                'window_size_after': int(len(current_graphs)),
+                'admitted': False,
+                'replaced': False,
+            }
             return covered
 
+        current_obj = window_objective(current_graphs, total_constraints, self.gamma)
         best_graphs = current_graphs
         best_obj = current_obj
         for idx in range(len(current_graphs)):
@@ -715,11 +830,35 @@ class ApxChase:
 
         if best_graphs is current_graphs:
             self._log("Skip: candidate does not improve set-level objective.")
+            self._last_window_update_stats = {
+                'pair_sec': float(pair_sec),
+                'gamma_sec': float(gamma_sec),
+                'window_sec': float(time.time() - update_t0 - pair_sec - gamma_sec),
+                'update_total_sec': float(time.time() - update_t0),
+                'grounded_count': int(len(Gamma_G)),
+                'new_covered_count': int(len(new_cov)),
+                'window_size_before': int(len(current_graphs)),
+                'window_size_after': int(len(current_graphs)),
+                'admitted': False,
+                'replaced': False,
+            }
             return covered
 
         W_k.clear()
         for graph in best_graphs:
             heapq.heappush(W_k, WindowEntry(float(getattr(graph, '_pair_quality', 0.0)), graph).as_tuple())
+        self._last_window_update_stats = {
+            'pair_sec': float(pair_sec),
+            'gamma_sec': float(gamma_sec),
+            'window_sec': float(time.time() - update_t0 - pair_sec - gamma_sec),
+            'update_total_sec': float(time.time() - update_t0),
+            'grounded_count': int(len(Gamma_G)),
+            'new_covered_count': int(len(new_cov)),
+            'window_size_before': int(len(current_graphs)),
+            'window_size_after': int(len(best_graphs)),
+            'admitted': True,
+            'replaced': True,
+        }
         return window_coverage(best_graphs)
 
     def _run(self, H: Data, root: Optional[int]) -> Tuple[Set, List[Data]]:
@@ -824,7 +963,35 @@ class HeuChase(ApxChase):
             H.E_base = H.edge_index.size(1)
 
         # Extract node embeddings once
+        target_id = int(getattr(H, 'root', root if root is not None else -1))
+        if root is not None and hasattr(H, '_nodes_in_full'):
+            try:
+                if int(root) < len(H._nodes_in_full):
+                    target_id = int(H._nodes_in_full[int(root)].item())
+            except Exception:
+                pass
+        emb_t0 = time.time()
         emb = _extract_node_embeddings(self.model, H)
+        emb_sec = time.time() - emb_t0
+        ctx_t0 = time.time()
+        edmonds_ctx = _build_edmonds_context(H, emb)
+        ctx_sec = time.time() - ctx_t0
+        rng = torch.Generator(device='cpu')
+        rng.manual_seed(0)
+        is_large_graph = bool(
+            self.large_graph_fast_mode and (
+                int(getattr(H, 'num_nodes', 0) or 0) >= self.large_graph_node_threshold or
+                int(H.edge_index.size(1)) >= self.large_graph_edge_threshold
+            )
+        )
+        cand_mode = "heuc_edmonds_fast" if is_large_graph else "heuc_edmonds"
+        print(
+            f"[HeuC | Node {target_id}] stage=edmonds_setup "
+            f"|V|={H.num_nodes}, |E|={H.edge_index.size(1)}, emb={emb_sec:.4f}s, ctx={ctx_sec:.4f}s, "
+            f"cand_mode={cand_mode}, large={is_large_graph}"
+            ,
+            flush=True,
+        )
 
         n_candidates = 0
         n_verified = 0
@@ -832,25 +999,68 @@ class HeuChase(ApxChase):
         fallback_used = False
         motif_candidates_used = False
         supplemental_candidates_used = False
+        candidate_masks: List[Tensor] = []
+        seen_masks = set()
 
-        for t in range(self.m):
-            edge_mask = _candidate_by_edmonds(H, root, emb, noise_std=self.noise_std)
-            if edge_mask is None or edge_mask.dtype != torch.bool or edge_mask.numel() != H.edge_index.size(1):
-                # Safety: skip malformed candidates
-                continue
-            n_candidates += 1
-            Gs = _induce_subgraph_from_edges(H, edge_mask)
-            ok = self.verify_witness_fn(self.model, root, Gs)
-            if self.debug:
-                self._log(f"[HeuChase] cand#{t+1}: |E|={edge_mask.sum().item()} -> verify={ok}")
-            if ok:
-                n_verified += 1
-                old_cov = covered
-                covered = self._update_window(W_k, Gs, covered)
-                if len(covered) > len(old_cov):
-                    n_admitted += 1
-                    if self.debug:
-                        self._log(f"[HeuChase]   admitted; |Γ|={len(covered)}, heap={len(W_k)}")
+        def _append_mask(mask: Optional[Tensor]) -> None:
+            if mask is None or mask.dtype != torch.bool or mask.numel() != H.edge_index.size(1):
+                return
+            key = tuple(torch.nonzero(mask, as_tuple=False).flatten().tolist())
+            if not key or key in seen_masks:
+                return
+            seen_masks.add(key)
+            candidate_masks.append(mask)
+
+        for _ in range(self.m):
+            cand_t0 = time.time()
+            _append_mask(
+                _candidate_by_edmonds(
+                    H,
+                    root,
+                    emb,
+                    noise_std=self.noise_std,
+                    edmonds_ctx=edmonds_ctx,
+                    rng=rng,
+                )
+            )
+            cand_gen_sec = time.time() - cand_t0
+            if len(candidate_masks) > n_candidates:
+                edge_mask = candidate_masks[-1]
+                print(
+                    f"[HeuC | Node {target_id}] cand_ready#{n_candidates+1}/{self.m} "
+                    f"|E(Gs)|={int(edge_mask.sum().item())}, edmonds={cand_gen_sec:.4f}s",
+                    flush=True,
+                )
+                Gs = _induce_subgraph_from_edges(H, edge_mask)
+                verify_t0 = time.time()
+                ok = self.verify_witness_fn(self.model, root, Gs)
+                verify_sec = time.time() - verify_t0
+                update_sec = 0.0
+                gamma_sec = 0.0
+                grounded_count = 0
+                admitted = False
+                replaced = False
+                if ok:
+                    n_verified += 1
+                    old_cov = covered
+                    update_t0 = time.time()
+                    covered = self._update_window(W_k, Gs, covered)
+                    update_sec = time.time() - update_t0
+                    stats = dict(getattr(self, '_last_window_update_stats', {}) or {})
+                    gamma_sec = float(stats.get('gamma_sec', 0.0))
+                    grounded_count = int(stats.get('grounded_count', 0))
+                    admitted = bool(stats.get('admitted', False))
+                    replaced = bool(stats.get('replaced', False))
+                    if len(covered) > len(old_cov):
+                        n_admitted += 1
+                n_candidates += 1
+                print(
+                    f"[HeuC | Node {target_id}] cand#{n_candidates}/{self.m} "
+                    f"|E(Gs)|={int(edge_mask.sum().item())}, edmonds={cand_gen_sec:.4f}s, "
+                    f"verify={verify_sec:.4f}s, grounding={gamma_sec:.4f}s, window={update_sec:.4f}s, "
+                    f"ok={ok}, grounded={grounded_count}, admitted={admitted}, replaced={replaced}",
+                    flush=True,
+                )
 
         # HeuC is intentionally kept within a strict Edmonds/arborescence
         # family for the main experiments. Do not fall through into Apx-like
@@ -874,8 +1084,10 @@ class HeuChase(ApxChase):
         # Annotate witnesses with grounded constraints & rep_sum just like parent
         annotated = []
         for Gs in S_k:
-            grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
             try:
+                grounded_here = getattr(Gs, '_grounded_names_set', None)
+                if grounded_here is None:
+                    grounded_here = self.gamma_fn(Gs, self.Sigma, self.B)
                 names = list(grounded_here)
                 rep_val = float(getattr(Gs, '_rep_sum', 0.0))
                 for attr in ('grounded_names', 'grounded', 'grounded_constraints', 'covered_constraints'):
@@ -898,5 +1110,7 @@ class HeuChase(ApxChase):
             'fallback_selected': bool(fallback_selected),
             'motif_candidates_used': bool(motif_candidates_used),
             'supplemental_candidates_used': bool(supplemental_candidates_used),
+            'candidate_generation_mode': cand_mode,
+            'large_graph_fastpath': bool(is_large_graph),
         }
         return Sigma_star, annotated

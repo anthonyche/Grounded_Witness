@@ -92,13 +92,30 @@ def _node_witness_metrics(chaser: ApxChase, witness: Data, reference_graph: Data
 
 
 def _constraint_signature(constraints: List[dict]) -> str:
-    names = []
+    versioned_constraints = []
     for constraint in constraints:
         try:
-            names.append(str(constraint.get("name", constraint)))
+            versioned_constraints.append({
+                "name": str(constraint.get("name", constraint)),
+                "antecedent": constraint.get("antecedent", {}),
+                "consequent": constraint.get("consequent", {}),
+            })
         except Exception:
-            names.append(str(constraint))
-    payload = json.dumps(sorted(names), ensure_ascii=False)
+            versioned_constraints.append({"repr": str(constraint)})
+    payload = json.dumps(
+        {
+            "masking_version": "full_motif_drop_v1",
+            "constraints": sorted(
+                versioned_constraints,
+                key=lambda item: (
+                    str(item.get("name", "")),
+                    json.dumps(item, sort_keys=True, ensure_ascii=False),
+                ),
+            ),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
@@ -117,6 +134,12 @@ def _mask_ratio_token(value: Any) -> str:
         return str(value)
 
 
+def _effective_mask_ratio(config: Dict[str, Any]) -> Any:
+    if config.get("mask_ratio", None) is not None:
+        return config.get("mask_ratio")
+    return config.get("incompleteness", None)
+
+
 def _prepare_observed_node_workload(
     data: Data,
     target_node: int,
@@ -124,11 +147,12 @@ def _prepare_observed_node_workload(
     config: Dict[str, Any],
 ) -> Tuple[Data, List[Tuple[int, int]], torch.Tensor]:
     cache_root = _observed_cache_dir(config)
+    mask_ratio = _effective_mask_ratio(config)
     cache_key = (
         f"node_{int(target_node)}"
         f"__L_{int(config.get('L', 2))}"
         f"__max_masks_{int(config.get('max_masks', 1))}"
-        f"__mask_ratio_{_mask_ratio_token(config.get('mask_ratio', None))}"
+        f"__mask_ratio_{_mask_ratio_token(mask_ratio)}"
         f"__seed_{int(config.get('random_seed', 0))}"
         f"__pc_{1 if bool(config.get('preserve_connectivity', True)) else 0}"
         f"__constraints_{_constraint_signature(constraints)}.pt"
@@ -144,7 +168,7 @@ def _prepare_observed_node_workload(
         constraints,
         num_hops=config.get("L", 2),
         max_masks=config.get("max_masks", 1),
-        mask_ratio=config.get("mask_ratio", None),
+        mask_ratio=mask_ratio,
         seed=config.get("random_seed"),
     )
     torch.save(
@@ -200,6 +224,8 @@ def _run_one_node_apxchase(
     verified_witness_count = int(run_stats.get("num_candidates_verified", len(witnesses)) or 0)
     selected_witness_count = int(len(witnesses))
     admitted_candidate_count = int(run_stats.get("num_candidates_admitted", 0) or 0)
+    candidate_generation_mode = str(run_stats.get("candidate_generation_mode", "default"))
+    large_graph_fastpath = bool(run_stats.get("large_graph_fastpath", False))
     
     # Extract coverage
     coverage_names = sorted(set([c.get("name", str(c)) if isinstance(c, dict) else str(c) for c in Sigma_star]))
@@ -281,12 +307,31 @@ def _run_one_node_apxchase(
     
     print(
         f"[Node {target_node}] witnesses={verified_witness_count}, "
+        f"|V|={int(masked_subgraph.num_nodes)}, |E|={observed_num_edges}, "
         f"selected_witnesses={selected_witness_count}, "
         f"covered_constraints={len(coverage_names)}/{max(1, len(active_names))} active "
+        f"cand_mode={candidate_generation_mode}, fastpath={large_graph_fastpath} "
         f"fid={avg_fidelity:.4f}, conc={avg_conciseness:.4f}, time={elapsed:.4f}s"
     )
 
     return elapsed, verified_witness_count, avg_fidelity, avg_conciseness, coverage_ratio_normalized
+
+
+def _print_node_stage(
+    method_label: str,
+    current_idx: int,
+    total_nodes: int,
+    target_node: int,
+    observed_subgraph: Data,
+    dropped_edges: List[Tuple[int, int]],
+    stage: str,
+) -> None:
+    num_nodes = int(getattr(observed_subgraph, "num_nodes", 0) or 0)
+    num_edges = int(observed_subgraph.edge_index.size(1)) if getattr(observed_subgraph, "edge_index", None) is not None else 0
+    print(
+        f"[{method_label} {current_idx}/{total_nodes} | Node {target_node}] "
+        f"{stage} |V|={num_nodes}, |E|={num_edges}, dropped={len(dropped_edges)}"
+    )
 
 
 def _run_one_node_baseline(
@@ -422,7 +467,11 @@ def _run_one_node_baseline(
         "subgraph": subgraph.cpu(),
     }, os.path.join(save_root, f"expl_node_{target_node}_{baseline_name}.pt"))
     
-    print(f"[{baseline_name.upper()} Node {target_node}] fid={fid_minus:.4f}, conc={conciseness:.4f}, time={elapsed:.4f}s")
+    print(
+        f"[{baseline_name.upper()} Node {target_node}] "
+        f"|V|={int(subgraph.num_nodes)}, |E|={int(subgraph.edge_index.size(1))} "
+        f"fid={fid_minus:.4f}, conc={conciseness:.4f}, time={elapsed:.4f}s"
+    )
     
     return elapsed, 1, float(fid_minus), float(conciseness), coverage
 
@@ -456,6 +505,22 @@ def main() -> None:
     exp_name = str(config.get("exp_name", "apxchase_cora")).lower()
     
     debug_mode = bool(config.get("debug", False))
+    large_graph_kwargs = {
+        "large_graph_fast_mode": config.get("apx_large_graph_fast_mode", True),
+        "large_graph_node_threshold": config.get("apx_large_graph_node_threshold", 2500),
+        "large_graph_edge_threshold": config.get("apx_large_graph_edge_threshold", 8000),
+        "large_graph_seed_per_constraint": config.get("apx_large_graph_seed_per_constraint", 1),
+        "large_graph_candidate_expand_steps": config.get("apx_large_graph_candidate_expand_steps", 1),
+        "large_graph_candidate_branch_factor": config.get("apx_large_graph_candidate_branch_factor", 2),
+        "large_graph_candidate_beam_width": config.get("apx_large_graph_candidate_beam_width", 4),
+        "large_graph_candidate_max_masks": config.get("apx_large_graph_candidate_max_masks", 16),
+        "large_graph_max_consequent_matches_per_constraint": config.get("apx_large_graph_max_consequent_matches_per_constraint", 8),
+        "large_graph_stream_max_candidates": config.get("apx_large_graph_stream_max_candidates", 128),
+        "large_graph_disable_ranked_prioritization": config.get("apx_large_graph_disable_ranked_prioritization", True),
+        "large_graph_disable_task_aware_hybrid": config.get("apx_large_graph_disable_task_aware_hybrid", True),
+        "large_graph_disable_full_mask_prune": config.get("apx_large_graph_disable_full_mask_prune", True),
+        "large_graph_disable_legacy_prefix": config.get("apx_large_graph_disable_legacy_prefix", True),
+    }
 
     chaser = ApxChase(
         model=model,
@@ -480,6 +545,7 @@ def main() -> None:
         near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
         near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
         near_full_beam_width=config.get("apx_near_full_beam_width", 4),
+        **large_graph_kwargs,
         debug=debug_mode,
     )
     
@@ -512,8 +578,11 @@ def main() -> None:
     print(f"{'='*70}\n")
     
     if exp_name.startswith("apxchase"):
-        for target_node in target_nodes:
+        total_targets = len(target_nodes)
+        for idx, target_node in enumerate(target_nodes, start=1):
+            print(f"[ApxC {idx}/{total_targets} | Node {target_node}] stage=prepare_observed")
             observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
+            _print_node_stage("ApxC", idx, total_targets, target_node, observed_subgraph, dropped_edges, "stage=run_explain")
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
                 target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
@@ -550,10 +619,14 @@ def main() -> None:
             near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
             near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
             near_full_beam_width=config.get("apx_near_full_beam_width", 4),
+            **large_graph_kwargs,
             debug=debug_mode,
         )
-        for target_node in target_nodes:
+        total_targets = len(target_nodes)
+        for idx, target_node in enumerate(target_nodes, start=1):
+            print(f"[HeuC {idx}/{total_targets} | Node {target_node}] stage=prepare_observed")
             observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
+            _print_node_stage("HeuC", idx, total_targets, target_node, observed_subgraph, dropped_edges, "stage=run_explain")
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
                 target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
@@ -587,11 +660,15 @@ def main() -> None:
             near_full_delete_budget=config.get("apx_near_full_delete_budget", 3),
             near_full_branch_factor=config.get("apx_near_full_branch_factor", 6),
             near_full_beam_width=config.get("apx_near_full_beam_width", 4),
+            **large_graph_kwargs,
             max_enforce_iterations=config.get("max_enforce_iterations", 100),
             debug=debug_mode,
         )
-        for target_node in target_nodes:
+        total_targets = len(target_nodes)
+        for idx, target_node in enumerate(target_nodes, start=1):
+            print(f"[Exh {idx}/{total_targets} | Node {target_node}] stage=prepare_observed")
             observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
+            _print_node_stage("Exh", idx, total_targets, target_node, observed_subgraph, dropped_edges, "stage=enter_explain(enforce_first)")
             elapsed, count, fid, conc, cov = _run_one_node_apxchase(
                 target_node, observed_subgraph, dropped_edges, constraints, config, device, chaser
             )
@@ -603,8 +680,11 @@ def main() -> None:
     
     elif exp_name.startswith("gnnexplainer"):
         from baselines import run_gnn_explainer_node
-        for target_node in target_nodes:
+        total_targets = len(target_nodes)
+        for idx, target_node in enumerate(target_nodes, start=1):
+            print(f"[GEX {idx}/{total_targets} | Node {target_node}] stage=prepare_observed")
             observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
+            _print_node_stage("GEX", idx, total_targets, target_node, observed_subgraph, dropped_edges, "stage=run_explain")
             elapsed, count, fid, conc, cov = _run_one_node_baseline(
                 target_node, observed_subgraph, dropped_edges, constraints, config, device, model, "gnnexplainer"
             )
@@ -616,8 +696,11 @@ def main() -> None:
     
     elif exp_name.startswith("pgexplainer"):
         from baselines import run_pgexplainer_node
-        for target_node in target_nodes:
+        total_targets = len(target_nodes)
+        for idx, target_node in enumerate(target_nodes, start=1):
+            print(f"[PGX {idx}/{total_targets} | Node {target_node}] stage=prepare_observed")
             observed_subgraph, dropped_edges, _ = _prepare_observed_node_workload(data, target_node, constraints, config)
+            _print_node_stage("PGX", idx, total_targets, target_node, observed_subgraph, dropped_edges, "stage=run_explain")
             elapsed, count, fid, conc, cov = _run_one_node_baseline(
                 target_node, observed_subgraph, dropped_edges, constraints, config, device, model, "pgexplainer"
             )

@@ -7,7 +7,7 @@ import csv
 import hashlib
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import torch
@@ -507,6 +507,11 @@ def _rel_adjacency(graph: Data) -> Dict[int, List[Tuple[int, int]]]:
 
 
 def _iter_training_samples(dataset_resource: Any, config: Dict[str, Any]) -> Iterable[Data]:
+    scope = str(config.get("constraint_mining_scope", "train")).lower()
+    if scope in {"target_union", "target_set_union", "targets"}:
+        yield from _iter_target_samples(dataset_resource, config)
+        return
+
     rng = random.Random(int(config.get("random_seed", 0)))
     max_samples = int(config.get("constraint_mining_max_samples", 64))
     num_hops = int(config.get("constraint_mining_hops", config.get("L", 2)))
@@ -589,6 +594,79 @@ def _pattern_nodes_for_edges(nodes_spec: Dict[str, Any], edges: Sequence[Tuple[A
     return used
 
 
+def _canonical_pattern_edge(edge: Any) -> Tuple[str, str, Optional[Tuple[Any, ...]]]:
+    u, v, rel = _parse_edge_spec(edge)
+    u_s, v_s = str(u), str(v)
+    if u_s <= v_s:
+        a, b = u_s, v_s
+    else:
+        a, b = v_s, u_s
+    if rel is None:
+        rel_key = None
+    elif isinstance(rel, set):
+        rel_key = tuple(sorted(rel))
+    elif isinstance(rel, (list, tuple)):
+        rel_key = tuple(sorted(rel))
+    else:
+        rel_key = (rel,)
+    return a, b, rel_key
+
+
+def _merge_constraint_full_motif(tgd: TGD) -> Dict[str, Any]:
+    antecedent = tgd.get("antecedent", {})
+    consequent = tgd.get("consequent", {})
+    nodes: Dict[str, Any] = {}
+    for source in (antecedent.get("nodes", {}), consequent.get("nodes", {})):
+        for var, spec in source.items():
+            if var not in nodes:
+                nodes[var] = dict(spec)
+                continue
+            merged = dict(nodes[var])
+            if "in" in merged or "in" in spec:
+                merged["in"] = sorted(set(merged.get("in", [])) | set(spec.get("in", [])))
+            nodes[var] = merged
+    edge_map: Dict[Tuple[str, str, Optional[Tuple[Any, ...]]], Any] = {}
+    for edge in list(antecedent.get("edges", [])) + list(consequent.get("edges", [])):
+        edge_map[_canonical_pattern_edge(edge)] = edge
+    distinct = sorted(set(list(antecedent.get("distinct", [])) + list(consequent.get("distinct", []))))
+    return {
+        "nodes": nodes,
+        "edges": list(edge_map.values()),
+        "distinct": distinct,
+    }
+
+
+def _antecedent_only_edges(tgd: TGD) -> List[Any]:
+    antecedent = list(tgd.get("antecedent", {}).get("edges", []))
+    consequent_keys = {_canonical_pattern_edge(edge) for edge in list(tgd.get("consequent", {}).get("edges", []))}
+    return [edge for edge in antecedent if _canonical_pattern_edge(edge) not in consequent_keys]
+
+
+def _maskable_edge_candidates_for_constraint(
+    sample: Data,
+    tgd: TGD,
+    find_pattern_matches: Any,
+) -> List[Tuple[int, int]]:
+    droppable_specs = _antecedent_only_edges(tgd)
+    if not droppable_specs:
+        return []
+    full_motif = _merge_constraint_full_motif(tgd)
+    try:
+        full_matches = find_pattern_matches(sample, full_motif)
+    except Exception:
+        full_matches = []
+    candidates: Set[Tuple[int, int]] = set()
+    for binding in full_matches:
+        for edge_spec in droppable_specs:
+            u_var, v_var, _ = _parse_edge_spec(edge_spec)
+            if u_var not in binding or v_var not in binding:
+                continue
+            u = int(binding[u_var])
+            v = int(binding[v_var])
+            candidates.add((u, v) if u <= v else (v, u))
+    return sorted(candidates)
+
+
 def _dedupe_tgds(constraints: Sequence[TGD]) -> List[TGD]:
     unique: List[TGD] = []
     seen: set[str] = set()
@@ -605,6 +683,38 @@ def _dedupe_tgds(constraints: Sequence[TGD]) -> List[TGD]:
         seen.add(signature)
         unique.append(tgd)
     return unique
+
+
+def _select_constraints_by_target_coverage(constraints: Sequence[TGD], limit: int) -> List[TGD]:
+    if limit <= 0 or not constraints:
+        return []
+    remaining = [json.loads(json.dumps(tgd)) for tgd in constraints]
+    selected: List[TGD] = []
+    covered_targets: Set[int] = set()
+    while remaining and len(selected) < limit:
+        best_idx = None
+        best_key = None
+        for idx, tgd in enumerate(remaining):
+            mining = tgd.get("mining", {})
+            targets = {int(v) for v in mining.get("target_maskable_nodes_clean", [])}
+            gain = len(targets - covered_targets)
+            key = (
+                gain,
+                len(targets),
+                int(mining.get("target_maskable_count_clean", 0)),
+                int(mining.get("support", 0)),
+                -idx,
+            )
+            if best_key is None or key > best_key:
+                best_key = key
+                best_idx = idx
+        assert best_idx is not None
+        chosen = remaining.pop(best_idx)
+        selected.append(chosen)
+        covered_targets.update(int(v) for v in chosen.get("mining", {}).get("target_maskable_nodes_clean", []))
+    if len(selected) < limit and remaining:
+        selected.extend(remaining[: max(0, limit - len(selected))])
+    return selected
 
 
 def _iter_target_samples(dataset_resource: Any, config: Dict[str, Any]) -> Iterable[Data]:
@@ -659,6 +769,7 @@ def _iter_target_samples(dataset_resource: Any, config: Dict[str, Any]) -> Itera
             subgraph.constraint_type_native = data.constraint_type_native[subset]
         if hasattr(data, "edge_rel_type") and data.edge_rel_type is not None:
             subgraph.edge_rel_type = data.edge_rel_type[edge_mask]
+        subgraph._source_target_node = int(node_id)
         yield subgraph
 
 
@@ -668,6 +779,8 @@ def _emit_dblp_backchase_variants(
     motif_edges: Sequence[Tuple[Any, ...]],
     support: int,
     template: str,
+    target_maskable_support: Optional[int] = None,
+    target_maskable_nodes: Optional[Sequence[int]] = None,
 ) -> List[TGD]:
     variants: List[TGD] = []
     for idx, consequent_edge in enumerate(motif_edges):
@@ -699,6 +812,11 @@ def _emit_dblp_backchase_variants(
                 "antecedent_edge_count": int(len(antecedent_edges)),
             },
         }
+        if target_maskable_support is not None:
+            tgd["mining"]["target_maskable_count_clean"] = int(target_maskable_support)
+            tgd["mining"]["target_maskable_edge_count_clean"] = int(target_maskable_support)
+        if target_maskable_nodes is not None:
+            tgd["mining"]["target_maskable_nodes_clean"] = [int(v) for v in sorted(set(target_maskable_nodes))]
         validate_tgd(tgd)
         variants.append(tgd)
     return variants
@@ -722,11 +840,18 @@ def _filter_dblp_constraints_by_consequent_matchability(
 
     workload_samples = list(_iter_target_samples(dataset_resource, config))
     min_hits = int(config.get("constraint_target_min_hit", 1))
+    min_maskable = int(config.get("constraint_target_min_maskable", 0))
+    prioritize_maskable = bool(config.get("constraint_rank_by_target_maskable", False))
     audited: List[TGD] = []
     for tgd in constraints:
+        existing_mining = dict(tgd.get("mining", {}))
         workload_hit_count = 0
         consequent_match_count = 0
         workload_active_count = 0
+        preset_maskable_count = existing_mining.get("target_maskable_count_clean", None)
+        preset_maskable_edge_count = existing_mining.get("target_maskable_edge_count_clean", None)
+        workload_maskable_count = int(preset_maskable_count) if preset_maskable_count is not None else 0
+        workload_maskable_edge_count = int(preset_maskable_edge_count) if preset_maskable_edge_count is not None else 0
         for sample in workload_samples:
             try:
                 matches = find_pattern_matches(sample, tgd.get("consequent", {}))
@@ -741,17 +866,26 @@ def _filter_dblp_constraints_by_consequent_matchability(
                         workload_active_count += 1
                 except Exception:
                     pass
+            if prioritize_maskable and preset_maskable_count is None:
+                maskable_edges = _maskable_edge_candidates_for_constraint(sample, tgd, find_pattern_matches)
+                if maskable_edges:
+                    workload_maskable_count += 1
+                    workload_maskable_edge_count += int(len(maskable_edges))
         enriched = json.loads(json.dumps(tgd))
         mining = dict(enriched.get("mining", {}))
         mining["target_workload_hit_count"] = int(workload_hit_count)
         mining["target_consequent_match_count"] = int(consequent_match_count)
         mining["target_workload_active_count"] = int(workload_active_count)
+        mining["target_maskable_count_clean"] = int(workload_maskable_count)
+        mining["target_maskable_edge_count_clean"] = int(workload_maskable_edge_count)
         mining["target_probe_sample_count"] = int(len(workload_samples))
         enriched["mining"] = mining
         audited.append(enriched)
 
     audited.sort(
         key=lambda tgd: (
+            -int(tgd.get("mining", {}).get("target_maskable_count_clean", 0)) if prioritize_maskable else 0,
+            -int(tgd.get("mining", {}).get("target_maskable_edge_count_clean", 0)) if prioritize_maskable else 0,
             -int(tgd.get("mining", {}).get("target_workload_active_count", 0)),
             -int(tgd.get("mining", {}).get("target_workload_hit_count", 0)),
             -int(tgd.get("mining", {}).get("support", 0)),
@@ -759,7 +893,11 @@ def _filter_dblp_constraints_by_consequent_matchability(
             str(tgd.get("name", "")),
         )
     )
-    filtered = [tgd for tgd in audited if int(tgd.get("mining", {}).get("target_workload_hit_count", 0)) >= min_hits]
+    filtered = [
+        tgd for tgd in audited
+        if int(tgd.get("mining", {}).get("target_workload_hit_count", 0)) >= min_hits
+        and int(tgd.get("mining", {}).get("target_maskable_count_clean", 0)) >= min_maskable
+    ]
     if bool(config.get("constraint_filter_target_matchability", True)):
         return filtered
     return audited
@@ -830,6 +968,11 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
     samples = list(_iter_training_samples(dataset_resource, config))
     if not samples:
         return []
+    target_union_scope = str(config.get("constraint_mining_scope", "train")).lower() in {
+        "target_union",
+        "target_set_union",
+        "targets",
+    }
 
     apt_support: Counter[Tuple[int, int, int]] = Counter()
     apc_support: Counter[Tuple[int, int, int]] = Counter()
@@ -837,8 +980,15 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
     aac_support: Counter[Tuple[int, int, int]] = Counter()
     app_support: Counter[Tuple[int, int, int]] = Counter()
     apa_support: Counter[Tuple[int, int, int]] = Counter()
+    apt_targets: Dict[Tuple[int, int, int], Set[int]] = {}
+    apc_targets: Dict[Tuple[int, int, int], Set[int]] = {}
+    aat_targets: Dict[Tuple[int, int, int], Set[int]] = {}
+    aac_targets: Dict[Tuple[int, int, int], Set[int]] = {}
+    app_targets: Dict[Tuple[int, int, int], Set[int]] = {}
+    apa_targets: Dict[Tuple[int, int, int], Set[int]] = {}
 
     for sample in samples:
+        sample_target = getattr(sample, "_source_target_node", None)
         subtype = _node_type_vector(sample)
         native = _native_type_vector(sample)
         neighbors = _rel_adjacency(sample)
@@ -914,6 +1064,20 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
         aac_support.update(aac_seen)
         app_support.update(app_seen)
         apa_support.update(apa_seen)
+        if sample_target is not None:
+            sample_target = int(sample_target)
+            for key in apt_seen:
+                apt_targets.setdefault(key, set()).add(sample_target)
+            for key in apc_seen:
+                apc_targets.setdefault(key, set()).add(sample_target)
+            for key in aat_seen:
+                aat_targets.setdefault(key, set()).add(sample_target)
+            for key in aac_seen:
+                aac_targets.setdefault(key, set()).add(sample_target)
+            for key in app_seen:
+                app_targets.setdefault(key, set()).add(sample_target)
+            for key in apa_seen:
+                apa_targets.setdefault(key, set()).add(sample_target)
 
     max_patterns = int(config.get("constraint_max_patterns", 64))
     max_per_template = int(config.get("dblp_max_patterns_per_template", max(8, max_patterns // 4)))
@@ -938,6 +1102,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_apt_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(apt_targets.get((a_sub, p_sub, t_sub), set())) if target_union_scope else None,
             )
         )
 
@@ -951,6 +1117,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_apc_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(apc_targets.get((a_sub, p_sub, c_sub), set())) if target_union_scope else None,
             )
         )
 
@@ -968,6 +1136,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_author_multi_paper_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(app_targets.get((a_sub, p1_sub, p2_sub), set())) if target_union_scope else None,
             )
         )
 
@@ -985,6 +1155,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_coauthor_paper_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(apa_targets.get((a1_sub, p_sub, a2_sub), set())) if target_union_scope else None,
             )
         )
 
@@ -1004,6 +1176,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_coauthor_topic_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(aat_targets.get((a1_sub, t_sub, a2_sub), set())) if target_union_scope else None,
             )
         )
 
@@ -1023,13 +1197,19 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
                 motif_edges=motif_edges,
                 support=int(support),
                 template="dblp_coauthor_conference_backchase",
+                target_maskable_support=int(support) if target_union_scope else None,
+                target_maskable_nodes=sorted(aac_targets.get((a1_sub, c_sub, a2_sub), set())) if target_union_scope else None,
             )
         )
 
     constraints = _dedupe_tgds(constraints)
-    constraints = _filter_dblp_constraints_by_consequent_matchability(constraints, dataset_resource, config)
+    prioritize_maskable = bool(config.get("constraint_rank_by_target_maskable", False))
+    if not bool(config.get("constraint_skip_target_audit", False)):
+        constraints = _filter_dblp_constraints_by_consequent_matchability(constraints, dataset_resource, config)
     constraints.sort(
         key=lambda tgd: (
+            -int(tgd.get("mining", {}).get("target_maskable_count_clean", 0)) if prioritize_maskable else 0,
+            -int(tgd.get("mining", {}).get("target_maskable_edge_count_clean", 0)) if prioritize_maskable else 0,
             -int(tgd.get("mining", {}).get("target_workload_active_count", 0)),
             -int(tgd.get("mining", {}).get("target_workload_hit_count", 0)),
             -int(tgd.get("mining", {}).get("support", 0)),
@@ -1037,6 +1217,8 @@ def _mine_dblp_completion_constraints(dataset_resource: Any, config: Dict[str, A
             str(tgd.get("name", "")),
         )
     )
+    if target_union_scope and bool(config.get("constraint_select_by_target_coverage", False)):
+        return _select_constraints_by_target_coverage(constraints, max_patterns)
     return constraints[:max_patterns]
 
 

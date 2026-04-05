@@ -24,7 +24,6 @@ defaults:
   constraint_mining_max_samples: 64
   constraint_max_patterns: 50
   baseline_edge_topk: 6
-  exhaustchase_timeout_sec: 100
   preserve_connectivity: true
   max_masks: 3
   apx_use_ranked_candidate_prioritization: true
@@ -41,6 +40,20 @@ defaults:
   apx_near_full_delete_budget: 3
   apx_near_full_branch_factor: 6
   apx_near_full_beam_width: 4
+  apx_large_graph_fast_mode: true
+  apx_large_graph_node_threshold: 2500
+  apx_large_graph_edge_threshold: 8000
+  apx_large_graph_seed_per_constraint: 4
+  apx_large_graph_candidate_expand_steps: 0
+  apx_large_graph_candidate_branch_factor: 2
+  apx_large_graph_candidate_beam_width: 4
+  apx_large_graph_candidate_max_masks: 16
+  apx_large_graph_max_consequent_matches_per_constraint: 8
+  apx_large_graph_stream_max_candidates: 128
+  apx_large_graph_disable_ranked_prioritization: true
+  apx_large_graph_disable_task_aware_hybrid: true
+  apx_large_graph_disable_full_mask_prune: true
+  apx_large_graph_disable_legacy_prefix: true
   heuchase_m: 20
   heuchase_noise_std: 0.2
   hidden_dim: 32

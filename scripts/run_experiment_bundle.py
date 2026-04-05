@@ -389,10 +389,15 @@ def _run_method(
 
     timeout_sec = None
     timeout_key = f"{run_cfg['method_key']}_timeout_sec"
+    raw_timeout = None
     if run_cfg.get(timeout_key) is not None:
-        timeout_sec = float(run_cfg[timeout_key])
+        raw_timeout = run_cfg.get(timeout_key)
     elif run_cfg.get("run_timeout_sec") is not None:
-        timeout_sec = float(run_cfg["run_timeout_sec"])
+        raw_timeout = run_cfg.get("run_timeout_sec")
+    if raw_timeout not in (None, "", False):
+        parsed_timeout = float(raw_timeout)
+        if parsed_timeout > 0:
+            timeout_sec = parsed_timeout
 
     cmd = [sys.executable, str(script_path), "--config", str(config_path)]
     if dataset_cfg["task"] == "graph" and len(run_cfg.get("graph_positions", [])) == 1:

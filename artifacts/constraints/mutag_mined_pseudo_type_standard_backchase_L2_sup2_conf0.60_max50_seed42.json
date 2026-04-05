@@ -1,0 +1,681 @@
+{
+  "dataset": "MUTAG",
+  "constraint_source": "mined",
+  "constraint_type_source": "pseudo_type",
+  "constraint_rule_mode": "standard_backchase",
+  "random_seed": 42,
+  "num_constraints": 10,
+  "constraints": [
+    {
+      "name": "mined_mutag_extension_0_0_1",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              1
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 64,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_0_1_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 64,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_1_0_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 64,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_2_1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 64,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_2_1_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 64,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_0_0_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              0
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 63,
+        "confidence": 0.984375
+      }
+    },
+    {
+      "name": "mined_mutag_extension_2_0_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 16,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_5_0_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 4,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_1_1_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              1
+            ]
+          },
+          "B": {
+            "in": [
+              1
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 3,
+        "confidence": 1.0
+      }
+    },
+    {
+      "name": "mined_mutag_extension_3_0_0",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              0
+            ]
+          },
+          "C": {
+            "in": [
+              0
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 3,
+        "confidence": 1.0
+      }
+    }
+  ],
+  "mining": {
+    "constraint_templates": [
+      "triangle",
+      "extension"
+    ],
+    "constraint_min_support": 2,
+    "constraint_min_confidence": 0.6,
+    "constraint_max_patterns": 50,
+    "constraint_mining_hops": 2,
+    "constraint_mining_max_samples": 64
+  }
+}

@@ -5,16 +5,16 @@
 # 这份文件现在是“统一实验入口”的默认手动模板。
 # 如果你要跨多次运行保持完全同一套 workload，不要只改 target_ratio；
 # 请显式设置 target_nodes / graph_positions。
-
+exhaustchase_timeout_sec: 1000
 run_name: manual_dblp
 dataset: dblp
-model_name: gcn1
+model_name: gcn2
 methods:
   - ApxC
   - HeuC
   - Exh
-  - GEX
-  - PGX
+  # - GEX
+  # - PGX
 
 # factor 为空时，只跑一个默认点。
 # 例如：
@@ -28,14 +28,16 @@ reuse_observed_graph_cache: true
 
 # ===== 主链默认参数 =====
 random_seed: 42
-sigma_size: 20
+sigma_size: 15
 local_budget_k: 2
-L: 1
-gamma: 1.0
+L: 2
+gamma: 1
 alpha: 0.5
 beta: 0.5
 incompleteness: 0.05
 target_ratio: 0.01
+heuchase_m: 10
+K : 6  #window size
 
 # ===== workload 固定策略 =====
 # 推荐：
