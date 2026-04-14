@@ -8,13 +8,13 @@
 exhaustchase_timeout_sec: 1000
 run_name: manual_dblp
 dataset: dblp
-model_name: gcn2
+model_name: gcn1
 methods:
-  - ApxC
-  - HeuC
-  - Exh
-  # - GEX
-  # - PGX
+  # - ApxC
+  # - HeuC
+  # - Exh
+  - GEX
+  - PGX
 
 # factor 为空时，只跑一个默认点。
 # 例如：
@@ -30,7 +30,7 @@ reuse_observed_graph_cache: true
 random_seed: 42
 sigma_size: 15
 local_budget_k: 2
-L: 2
+L: 1
 gamma: 1
 alpha: 0.5
 beta: 0.5

@@ -1,0 +1,296 @@
+{
+  "figure_1": {
+    "kind": "bar",
+    "filename": "figure_1_overall_efficiency.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Dataset",
+    "use_log": true,
+    "x": ["MUTAG", "DBLP", "ATLAS", "Cora", "BAShape"],
+    "series": {
+      "apxchase": [3.5, 15.03, 52.22, 157.36, 270.34],
+      "heuchase": [0.91, 9.35, 3.36, 3.09, 22.82],
+      "GNNExplainer": [1.71, 2.49, 3.46, 2.06, 9.34],
+      "PGExplainer": [1.62, 45.33, 31.17, 31.61, null],
+      "Exhaustive": [124.87, 129.7, 531.36, 662.93, null]
+    }
+  },
+  "figure_2": {
+    "kind": "line",
+    "filename": "figure_2_runtime_vs_constraint_size.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "|Sigma|",
+    "use_log": true,
+    "x": ["5", "10", "15", "20"],
+    "series": {
+      "apxchase": [12.9, 13.6, 14.3, 15.03],
+      "heuchase": [8.1, 8.6, 9.0, 9.35],
+      "GNNExplainer": [2.48, 2.49, 2.55, 2.49],
+      "PGExplainer": [42.2, 45.0, 45.2, 45.33],
+      "Exhaustive": [88.8, 102.0, 112.0, 129.7]
+    }
+  },
+  "figure_3": {
+    "kind": "line",
+    "filename": "figure_3_runtime_vs_target_ratio.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Target Node Ratio",
+    "use_log": true,
+    "x": ["1%", "2%", "3%", "4%", "5%"],
+    "series": {
+      "apxchase": [15.03, 29.8, 44.6, 59.1, 73.7],
+      "heuchase": [9.35, 19.6, 27.5, 36.2, 45.1],
+      "GNNExplainer": [2.49, 4.98, 7.46, 9.95, 12.43],
+      "PGExplainer": [45.33, 47.1, 48.8, 50.2, 51.7],
+      "Exhaustive": [129.7, 360.0, 695.0, 830.0, 1080.0]
+    }
+  },
+  "figure_4": {
+    "kind": "line",
+    "filename": "figure_4_runtime_vs_hops.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "L",
+    "use_log": true,
+    "x": ["1", "2", "3"],
+    "series": {
+      "apxchase": [5.5, 15.03, 163.8],
+      "heuchase": [2.27, 9.35, 1100.0],
+      "GNNExplainer": [1.6, 2.49, 41.45],
+      "PGExplainer": [37.8, 45.33, 57.2],
+      "Exhaustive": [45.0, 129.7, 640.0]
+    }
+  },
+  "figure_5": {
+    "kind": "line",
+    "filename": "figure_5_runtime_vs_incompleteness.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Incompleteness",
+    "use_log": true,
+    "x": ["5%", "10%", "15%", "20%"],
+    "series": {
+      "apxchase": [15.03, 14.2, 12.2, 9.8],
+      "heuchase": [9.35, 8.9, 6.8, 4.4],
+      "GNNExplainer": [2.49, 2.41, 2.3, 2.2],
+      "PGExplainer": [45.33, 45.0, 44.0, 44.6],
+      "Exhaustive": [129.7, 144.8, 167.0, 180.0]
+    }
+  },
+  "figure_6": {
+    "kind": "bar",
+    "filename": "figure_6_runtime_gnn_types.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "GNN Architecture",
+    "use_log": true,
+    "x": ["GCN_2", "GAT_2", "SAGE_2"],
+    "series": {
+      "apxchase": [15.03, 16.1, 18.7],
+      "heuchase": [9.35, 10.2, 9.8],
+      "GNNExplainer": [2.49, 3.1, 2.9],
+      "PGExplainer": [45.33, 48.2, 45.8],
+      "Exhaustive": [129.7, 135.0, 123.0]
+    }
+  },
+  "figure_7": {
+    "kind": "bar",
+    "filename": "figure_7_overall_coverage.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "Dataset",
+    "use_log": false,
+    "x": ["MUTAG", "DBLP", "ATLAS", "Cora", "BAShape"],
+    "series": {
+      "apxchase": [0.72, 0.56, 1.0, 0.6, 1.0],
+      "heuchase": [0.7, 0.8, 1.0, 0.4, 0.6],
+      "GNNExplainer": [0.2, 0.0, 0.17, 0.0, 0.0],
+      "PGExplainer": [0.18, 0.0, 0.31, 0.0, null],
+      "Exhaustive": [1.0, 0.56, 1.0, 0.8, null]
+    }
+  },
+  "figure_8": {
+    "kind": "line",
+    "filename": "figure_8_coverage_vs_budget.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "Local Budget k",
+    "use_log": false,
+    "x": ["1", "2", "4", "6"],
+    "series": {
+      "apxchase": [0.32, 0.56, 0.6, 0.6],
+      "heuchase": [0.64, 0.8, 0.8, 0.8],
+      "GNNExplainer": [0.0, 0.0, 0.0, 0.0],
+      "PGExplainer": [0.0, 0.0, 0.0, 0.0],
+      "Exhaustive": [0.34, 0.56, 0.58, 0.58]
+    }
+  },
+  "figure_9": {
+    "kind": "line",
+    "filename": "figure_9_coverage_vs_gamma.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "Gamma",
+    "use_log": false,
+    "x": ["0.2", "0.4", "0.6", "0.8", "1.0"],
+    "series": {
+      "apxchase": [0.19, 0.25, 0.28, 0.38, 0.56],
+      "heuchase": [0.8, 0.8, 0.8, 0.8, 0.8],
+      "Exhaustive": [0.18, 0.19, 0.32, 0.4, 0.56]
+    }
+  },
+  "figure_10": {
+    "kind": "line",
+    "filename": "figure_10_coverage_vs_hops.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "L",
+    "use_log": false,
+    "x": ["1", "2", "3"],
+    "series": {
+      "apxchase": [0.83, 0.56, 0.44],
+      "heuchase": [0.83, 0.8, 0.37],
+      "GNNExplainer": [0.0, 0.0, 0.0],
+      "PGExplainer": [0.0, 0.0, 0.0],
+      "Exhaustive": [0.88, 0.56, 0.49]
+    }
+  },
+  "figure_11": {
+    "kind": "line",
+    "filename": "figure_11_coverage_vs_incompleteness.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "Incompleteness",
+    "use_log": false,
+    "x": ["5%", "10%", "20%"],
+    "series": {
+      "apxchase": [0.56, 0.5, 0.44],
+      "heuchase": [0.8, 0.66, 0.6],
+      "GNNExplainer": [0.0, 0.0, 0.0],
+      "PGExplainer": [0.0, 0.0, 0.0],
+      "Exhaustive": [0.56, 0.58, 0.65]
+    }
+  },
+  "figure_12": {
+    "kind": "bar",
+    "filename": "figure_12_overall_fidelity.png",
+    "ylabel": "1 - Fidelity^-",
+    "xlabel": "Dataset",
+    "use_log": false,
+    "x": ["MUTAG", "DBLP", "ATLAS", "Cora", "BAShape"],
+    "series": {
+      "apxchase": [0.98, 0.89, 0.9, 0.82, 0.99],
+      "heuchase": [0.97, 0.88, 0.88, 0.88, 0.95],
+      "GNNExplainer": [0.85, 0.61, 0.76, 0.65, 0.78],
+      "PGExplainer": [0.91, 0.48, 0.79, 0.64, null],
+      "Exhaustive": [0.96, 0.79, 0.85, 0.9, null]
+    }
+  },
+  "figure_13": {
+    "kind": "line",
+    "filename": "figure_13_ogbn100m_runtime.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Processors",
+    "use_log": true,
+    "x": ["4", "6", "8", "10", "20"],
+    "series": {
+      "apxchase": [13949.72, 8995.12, 6707.92, 5252.43, 2642.99],
+      "heuchase": [282.06, 180.21, 133.43, 103.84, 53.75],
+      "GNNExplainer": [169.24, 104.52, 74.7, 56.91, 31.7],
+      "PGExplainer": [null, null, null, null, null],
+      "Exhaustive": [null, null, null, null, null]
+    }
+  },
+  "figure_14": {
+    "kind": "line",
+    "filename": "figure_14_treecycle_runtime_vs_graph_size.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Graph Size (edges)",
+    "use_log": true,
+    "x": ["1.1M", "2.3M", "17M", "1.4B"],
+    "series": {
+      "apxchase": [292.4, 318.7, 447.9, 898.3],
+      "heuchase": [48.6, 54.2, 82.51, 182.7],
+      "GNNExplainer": [22.8, 38.9, 54.0, 86.4],
+      "PGExplainer": [78.2, 86.7, 126.0, 210.3],
+      "Exhaustive": [null, null, null, null]
+    }
+  },
+  "figure_15": {
+    "kind": "line",
+    "filename": "figure_15_treecycle_runtime_vs_processors.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Processors",
+    "use_log": true,
+    "x": ["4", "6", "8", "10", "20"],
+    "series": {
+      "apxchase": [5030.48, 3291.0, 2424.0, 1804.0, 898.3],
+      "heuchase": [794.85, 627.0, 484.0, 383.0, 182.7],
+      "GNNExplainer": [418.2, 258.7, 209.6, 187.9, 86.4],
+      "PGExplainer": [1208.0, 784.0, 578.0, 454.0, 210.3],
+      "Exhaustive": [null, null, null, null, null]
+    }
+  },
+  "figure_16": {
+    "kind": "line",
+    "filename": "figure_16_treecycle_runtime_vs_targets.png",
+    "ylabel": "Total Run time (sec)",
+    "xlabel": "Target Nodes",
+    "use_log": true,
+    "x": ["100", "200", "300", "400", "500"],
+    "series": {
+      "apxchase": [898.3, 1815.0, 2724.0, 3695.0, 4568.0],
+      "heuchase": [182.7, 372.0, 542.0, 748.0, 905.0],
+      "GNNExplainer": [86.4, 171.8, 259.7, 345.9, 433.6],
+      "PGExplainer": [210.3, 433.0, 618.0, 862.0, 1038.0],
+      "Exhaustive": [null, null, null, null, null]
+    }
+  },
+  "figure_17": {
+    "kind": "line",
+    "filename": "figure_17_fidelity_vs_alpha.png",
+    "ylabel": "1 - Fidelity^-",
+    "xlabel": "Alpha",
+    "use_log": false,
+    "x": ["0.2", "0.4", "0.6", "0.8", "1.0"],
+    "series": {
+      "apxchase": [0.84, 0.87, 0.88, 0.88, 0.89],
+      "heuchase": [0.96, 0.96, 0.93, 0.92, 0.88],
+      "Exhaustive": [0.78, 0.79, 0.77, 0.78, 0.79]
+    }
+  },
+  "figure_18": {
+    "kind": "line",
+    "filename": "figure_18_conciseness_vs_gamma.png",
+    "ylabel": "Conciseness",
+    "xlabel": "Gamma",
+    "use_log": false,
+    "x": ["0.2", "0.4", "0.6", "0.8", "1.0"],
+    "series": {
+      "apxchase": [0.94, 0.92, 0.93, 0.94, 0.94],
+      "heuchase": [0.18, 0.18, 0.18, 0.18, 0.19],
+      "Exhaustive": [0.94, 0.94, 0.93, 0.92, 0.89]
+    }
+  },
+  "figure_19": {
+    "kind": "line",
+    "filename": "figure_19_coverage_vs_constraint_size.png",
+    "ylabel": "Normalized Coverage",
+    "xlabel": "|Sigma|",
+    "use_log": false,
+    "x": ["5", "10", "15", "20"],
+    "series": {
+      "apxchase": [0.44, 0.42, 0.48, 0.56],
+      "heuchase": [0.76, 0.72, 0.8, 0.8],
+      "GNNExplainer": [0.0, 0.0, 0.0, 0.0],
+      "PGExplainer": [0.0, 0.0, 0.0, 0.0],
+      "Exhaustive": [0.43, 0.44, 0.38, 0.56]
+    }
+  },
+  "figure_20": {
+    "kind": "line",
+    "filename": "figure_20_fidelity_vs_hops.png",
+    "ylabel": "1 - Fidelity^-",
+    "xlabel": "L",
+    "use_log": false,
+    "x": ["1", "2", "3"],
+    "series": {
+      "apxchase": [1.01, 0.89, 0.93],
+      "heuchase": [1.0, 0.88, 0.89],
+      "GNNExplainer": [1.007, 0.61, 0.74],
+      "PGExplainer": [1.01, 0.48, 0.75],
+      "Exhaustive": [1.01, 0.79, 0.91]
+    }
+  }
+}
