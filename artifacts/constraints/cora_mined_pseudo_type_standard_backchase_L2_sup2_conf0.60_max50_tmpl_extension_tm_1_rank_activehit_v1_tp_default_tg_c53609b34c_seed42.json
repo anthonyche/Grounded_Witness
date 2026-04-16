@@ -1,0 +1,1771 @@
+{
+  "dataset": "CORA",
+  "constraint_source": "mined",
+  "constraint_type_source": "pseudo_type",
+  "constraint_rule_mode": "standard_backchase",
+  "random_seed": 42,
+  "num_constraints": 25,
+  "constraints": [
+    {
+      "name": "mined_cora_extension_6_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 18,
+        "confidence": 0.6428571428571429,
+        "target_workload_hit_count": 43,
+        "target_consequent_match_count": 198,
+        "target_workload_active_count": 38,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 36,
+        "confidence": 0.9,
+        "target_workload_hit_count": 38,
+        "target_consequent_match_count": 639,
+        "target_workload_active_count": 36,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 32,
+        "confidence": 0.8,
+        "target_workload_hit_count": 38,
+        "target_consequent_match_count": 639,
+        "target_workload_active_count": 36,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_6_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 23,
+        "confidence": 0.696969696969697,
+        "target_workload_hit_count": 39,
+        "target_consequent_match_count": 542,
+        "target_workload_active_count": 35,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 26,
+        "confidence": 0.7878787878787878,
+        "target_workload_hit_count": 36,
+        "target_consequent_match_count": 271,
+        "target_workload_active_count": 35,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_2_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 26,
+        "confidence": 0.65,
+        "target_workload_hit_count": 38,
+        "target_consequent_match_count": 639,
+        "target_workload_active_count": 34,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 28,
+        "confidence": 0.8484848484848485,
+        "target_workload_hit_count": 36,
+        "target_consequent_match_count": 271,
+        "target_workload_active_count": 32,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 24,
+        "confidence": 0.7272727272727273,
+        "target_workload_hit_count": 36,
+        "target_consequent_match_count": 271,
+        "target_workload_active_count": 32,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 36,
+        "confidence": 0.8780487804878049,
+        "target_workload_hit_count": 31,
+        "target_consequent_match_count": 1146,
+        "target_workload_active_count": 31,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 23,
+        "confidence": 0.696969696969697,
+        "target_workload_hit_count": 39,
+        "target_consequent_match_count": 542,
+        "target_workload_active_count": 30,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 39,
+        "confidence": 0.9512195121951219,
+        "target_workload_hit_count": 31,
+        "target_consequent_match_count": 1146,
+        "target_workload_active_count": 30,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_2_5",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 28,
+        "confidence": 0.6829268292682927,
+        "target_workload_hit_count": 31,
+        "target_consequent_match_count": 1146,
+        "target_workload_active_count": 29,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_6_4_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              6
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.7142857142857143,
+        "target_workload_hit_count": 24,
+        "target_consequent_match_count": 93,
+        "target_workload_active_count": 23,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_5_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 12,
+        "confidence": 0.8,
+        "target_workload_hit_count": 24,
+        "target_consequent_match_count": 124,
+        "target_workload_active_count": 22,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_5_5_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              5
+            ]
+          },
+          "B": {
+            "in": [
+              5
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.6666666666666666,
+        "target_workload_hit_count": 24,
+        "target_consequent_match_count": 124,
+        "target_workload_active_count": 19,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_4_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 18,
+        "confidence": 0.9473684210526315,
+        "target_workload_hit_count": 18,
+        "target_consequent_match_count": 87,
+        "target_workload_active_count": 18,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_4_2_6",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              4
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 16,
+        "confidence": 0.8421052631578947,
+        "target_workload_hit_count": 18,
+        "target_consequent_match_count": 87,
+        "target_workload_active_count": 18,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_4_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              4
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 14,
+        "confidence": 0.7368421052631579,
+        "target_workload_hit_count": 18,
+        "target_consequent_match_count": 87,
+        "target_workload_active_count": 18,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_3_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 12,
+        "confidence": 0.9230769230769231,
+        "target_workload_hit_count": 16,
+        "target_consequent_match_count": 2324,
+        "target_workload_active_count": 15,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 16,
+        "confidence": 0.7272727272727273,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 247,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_2_3_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              2
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 15,
+        "confidence": 0.6818181818181818,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 247,
+        "target_workload_active_count": 13,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_6_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              6
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 10,
+        "confidence": 0.9090909090909091,
+        "target_workload_hit_count": 16,
+        "target_consequent_match_count": 507,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_2_3",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 14,
+        "confidence": 0.6363636363636364,
+        "target_workload_hit_count": 13,
+        "target_consequent_match_count": 247,
+        "target_workload_active_count": 11,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_3_3_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              3
+            ]
+          },
+          "B": {
+            "in": [
+              3
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 13,
+        "confidence": 1.0,
+        "target_workload_hit_count": 16,
+        "target_consequent_match_count": 2324,
+        "target_workload_active_count": 10,
+        "target_probe_sample_count": 64
+      }
+    },
+    {
+      "name": "mined_cora_extension_7_2_2",
+      "consequent": {
+        "nodes": {
+          "A": {
+            "in": [
+              7
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B"
+        ]
+      },
+      "antecedent": {
+        "nodes": {
+          "A": {
+            "in": [
+              7
+            ]
+          },
+          "B": {
+            "in": [
+              2
+            ]
+          },
+          "C": {
+            "in": [
+              2
+            ]
+          }
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ]
+        ],
+        "distinct": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "mining": {
+        "template": "edge_extension",
+        "support": 11,
+        "confidence": 1.0,
+        "target_workload_hit_count": 6,
+        "target_consequent_match_count": 22,
+        "target_workload_active_count": 6,
+        "target_probe_sample_count": 64
+      }
+    }
+  ],
+  "mining": {
+    "constraint_templates": [
+      "extension"
+    ],
+    "constraint_min_support": 2,
+    "constraint_min_confidence": 0.6,
+    "constraint_max_patterns": 50,
+    "constraint_mining_hops": 2,
+    "constraint_mining_max_samples": 64,
+    "constraint_ranking_version": "activehit_v1"
+  }
+}
