@@ -1,0 +1,26 @@
+run_name: tmp_heuc_single_new
+dataset: dblp
+model_name: gcn3
+methods:
+- HeuC
+factor_name: ''
+factor_values: []
+output_root: outputs/raw/bundles
+reuse_observed_graph_cache: true
+random_seed: 42
+sigma_size: 20
+local_budget_k: 2
+L: 3
+gamma: 1.0
+alpha: 0.5
+beta: 0.5
+incompleteness: 0.05
+target_ratio: 0.01
+target_nodes:
+- 52
+constraint_source: mined
+constraint_rule_mode: standard_backchase
+constraint_filter_target_matchability: true
+preserve_connectivity: true
+max_masks: 1
+heuchase_m: 10
